@@ -1,0 +1,19 @@
+// Type-checks the test files, which the build config deliberately leaves out.
+//
+// Tests run under `node --experimental-strip-types`, which erases types without
+// reading them — so without this, a test can call a method that does not exist
+// and the only symptom is a failure at the wrong layer, or none at all on a path
+// that is never taken. It also extends `erasableSyntaxOnly` over the tests,
+// which is how the restriction gets caught at typecheck time rather than as a
+// SyntaxError from the test runner.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

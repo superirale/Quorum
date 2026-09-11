@@ -6,3 +6,7 @@ dist/
 # Go
 bin/
 data/
+
+# Agent state: the once() ledger, cursors, counters, lease epochs. Local and
+# per-process by design — see packages/sdk/src/store.ts.
+state/

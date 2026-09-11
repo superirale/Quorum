@@ -14,6 +14,12 @@
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
 
+    // No syntax that has to be *compiled* rather than erased — no parameter
+    // properties, no enums, no namespaces. Everything here runs directly under
+    // `node --experimental-strip-types`, which refuses those at load time, and
+    // a runtime SyntaxError inside a test file is a poor way to learn it.
+    "erasableSyntaxOnly": true,
+
     // Source imports use `.ts` extensions so `node --experimental-strip-types`
     // can run any file directly; tsc rewrites them to `.js` on emit. Without
     // this pair, the extension in an import has to be a lie in one of the two

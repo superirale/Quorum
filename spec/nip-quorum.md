@@ -130,7 +130,7 @@ e k        NIP-22 parent: parent id, parent kind
 a          addressable coordinate <kind>:<pubkey>:<d>
 d          addressable identifier
 enc        content mode: plaintext | nip44 | mls (absent means plaintext)
-counter    per-author monotonic counter
+counter    per-author monotonic counter (stored kinds only — see Ordering)
 action     the action id this event belongs to
 quorum     protocol version
 ```
@@ -298,6 +298,45 @@ defence in depth, but MUST NOT be the only thing between an agent and production
 union. Without this rule, "give the agent admin so it can help" is the only
 workable pattern.
 
+## Leases
+
+Running an agent as two processes for availability is normal, and the ordinary
+way to do it is to give both the same key — that is what makes them replicas of
+one agent rather than two agents. A `lease` (28102) is how they avoid both
+answering.
+
+A claim carries `instance`, `epoch`, `ttl_seconds` and an optional `purpose`.
+`instance` is required and is not decoration: the holder cannot be identified by
+`pubkey`, because two claims from one pubkey are the expected case here rather
+than a conflict, so without a discriminator the replicas cannot tell each other
+apart, let alone agree.
+
+Claimants publish, wait a settle interval, and take the whole set of claims they
+can see for that thread and purpose. The winner is the minimum by:
+
+```
+(created_at asc, epoch desc, "<pubkey>:<instance>" asc)
+```
+
+where `created_at` is the **earliest** claim seen from that holder for that
+thread, not the most recent. A lease is renewed by republishing, and taking the
+latest would make every renewal an act of self-demotion: the holder's timestamp
+would move forward past a sibling's older losing claim and hand it the thread it
+had already lost.
+
+Every term is a field of a signed event, which is the property that matters:
+each replica computes the winner from the same shared data and reaches the same
+answer. Deciding by *local* observation order instead — first claim I saw wins —
+gives two replicas two different winners whenever the relay delivers to them in
+different orders, which is most of the time.
+
+Leases are advisory. A lease cannot be made authoritative without a consensus
+mechanism nobody wants in a chat relay, and an ephemeral event may simply be
+lost. It removes the common case of duplicate work; it is not what makes
+double-execution safe. That comes from idempotent effects and content-addressed
+ids, and an implementation that treats a held lease as permission to skip them
+has misread this section.
+
 ## Ordering
 
 Nostr has no total order. `created_at` is a client-supplied wall clock, and a
@@ -307,6 +346,20 @@ relay may withhold events by design. Three layers recover what matters:
    from this author", which combined with `to`-marked addressing covers the case
    that actually matters: *did I miss something addressed to me.* Works on any
    relay.
+
+   Events of an **ephemeral kind MUST NOT carry a `counter`**, and this is a
+   requirement rather than an optimisation. Relays do not store ephemeral events,
+   so a number spent on one is a sequence position nobody can ever backfill:
+   every reader replaying from history would see a permanent hole for each lease
+   renewal and heartbeat the author ever sent, and gap detection — the entire
+   point of the tag — would report a loss roughly twice a minute forever.
+   Numbering only the durable record keeps the signal worth having.
+
+   A writer MUST allocate a counter at most once per event. In particular, a
+   retry that rebuilds an event in order to be deduplicated by id MUST reuse the
+   counter of the attempt it is repeating; allocating a fresh one changes the
+   bytes, changes the id, and produces the second copy the retry was trying to
+   avoid.
 2. **NIP-22 `e` tags** — causal structure. A missing parent is detectable because
    you hold its id. Works on any relay.
 3. **8108 `checkpoint`** — a relay-signed Merkle root over the event ids it holds
@@ -402,3 +455,9 @@ A signed golden transcript of the full loop — request, proposal, approval,
 execution — is committed at `fixtures/deploy-approval.json`, and
 `scripts/validate.py` validates it using only the standard library and the
 committed schemas.
+
+`apps/relay` is a reference relay in Go (khatru + relay29) which reads those
+schemas as data — it could not import the TypeScript validators if it wanted to,
+which is the point. `@quorum/sdk` is a reference client implementation of the
+addressing, ordering and lease rules above, and `examples/echo-agent` is the
+smallest agent that exercises them.

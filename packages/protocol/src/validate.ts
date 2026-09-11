@@ -28,6 +28,7 @@ import {
   Kinds,
   RegularKinds,
   isAddressable,
+  isEphemeral,
   isQuorumKind,
 } from './kinds.ts'
 import {
@@ -173,10 +174,16 @@ export function validateEnvelope(event: NostrEvent): ValidationResult {
   const counterValue = tagValue(tags, TagName.Counter)
   if (counterValue !== undefined && !/^(0|[1-9][0-9]*)$/.test(counterValue)) {
     issues.push(err('invalid_counter', 'counter must be a non-negative integer', 'counter'))
-  } else if (counterValue === undefined) {
+  } else if (counterValue === undefined && !isEphemeral(kind)) {
     // A warning, not an error: without it this author's readers lose gap
     // detection, but the event is still perfectly valid on any relay and
     // rejecting it would break generic clients that know nothing of Quorum.
+    //
+    // Ephemeral kinds are exempt, and should not carry a counter at all.
+    // Relays do not store them, so a number spent on a heartbeat is a sequence
+    // position no reader can ever backfill — gap detection would report a
+    // permanent loss for every lease renewal the author has ever sent, which
+    // is the same as having no gap detection.
     issues.push(
       warn('missing_counter', 'no `counter` tag: readers cannot detect gaps from this author', 'counter'),
     )

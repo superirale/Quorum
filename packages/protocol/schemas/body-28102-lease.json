@@ -3,6 +3,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "instance": {
+      "type": "string",
+      "minLength": 1,
+      "description": "stable for the life of one process"
+    },
     "epoch": {
       "type": "integer",
       "minimum": 0,
@@ -20,6 +25,7 @@
     }
   },
   "required": [
+    "instance",
     "epoch"
   ],
   "title": "Lease body (kind 28102)"

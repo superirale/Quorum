@@ -1,0 +1,27 @@
+{
+  "name": "@quorum/echo-agent",
+  "version": "0.1.0",
+  "description": "Quorum: the smallest complete agent — p-tag addressing, replay across a restart, replica safety",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prestart": "pnpm --filter @quorum/sdk build",
+    "start": "node --experimental-strip-types src/main.ts",
+    "predemo": "pnpm --filter @quorum/sdk --filter @quorum/test-kit build",
+    "demo": "node --experimental-strip-types src/demo.ts",
+    "prelive": "pnpm --filter @quorum/sdk build",
+    "live": "node --experimental-strip-types src/live.ts",
+    "pretypecheck": "pnpm --filter @quorum/sdk --filter @quorum/test-kit build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@quorum/protocol": "workspace:*",
+    "@quorum/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@quorum/test-kit": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -82,6 +82,16 @@ export type AgentCursorBody = z.infer<typeof AgentCursorBody>
  * from this.
  */
 export const LeaseBody = z.object({
+  /**
+   * Which running process this claim comes from.
+   *
+   * The holder cannot be identified by `pubkey` alone. The ordinary way to run
+   * two replicas is to give both the same agent key — that is what makes them
+   * the same agent — so two claims from one pubkey are the normal case here,
+   * not a conflict. Without a discriminator the two replicas cannot even tell
+   * each other apart, let alone agree on which of them holds the thread.
+   */
+  instance: z.string().min(1).describe('stable for the life of one process'),
   epoch: z.int().nonnegative().describe('monotonic per holder; higher wins ties'),
   ttl_seconds: z.int().positive().default(60),
   purpose: z.string().optional(),

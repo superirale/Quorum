@@ -1,0 +1,35 @@
+{
+  "name": "@quorum/sdk",
+  "version": "0.1.0",
+  "description": "Quorum: the agent SDK — signers, a relay connection, exactly-once effects, replay and leases",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prebuild": "pnpm --filter @quorum/protocol build",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter @quorum/protocol --filter @quorum/test-kit build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "pretest": "pnpm --filter @quorum/protocol --filter @quorum/test-kit build",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
+    "@quorum/protocol": "workspace:*",
+    "@scure/base": "^1.2.0"
+  },
+  "devDependencies": {
+    "@quorum/test-kit": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

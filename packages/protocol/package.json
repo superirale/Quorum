@@ -11,10 +11,13 @@
     },
     "./schemas/*": "./schemas/*"
   },
-  "files": ["dist", "schemas"],
+  "files": [
+    "dist",
+    "schemas"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "schemas": "node --experimental-strip-types scripts/gen-schemas.ts",
     "fixtures": "node --experimental-strip-types scripts/gen-fixtures.ts",
     "check-registry": "node --experimental-strip-types scripts/check-registry.ts",

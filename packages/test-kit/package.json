@@ -1,0 +1,35 @@
+{
+  "name": "@quorum/test-kit",
+  "version": "0.1.0",
+  "description": "Quorum: an in-process fake relay and chaos helpers, so agents are testable with zero infrastructure",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "prebuild": "pnpm --filter @quorum/protocol build",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter @quorum/protocol build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "pretest": "pnpm --filter @quorum/protocol build",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@quorum/protocol": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.9.0"
+  }
+}

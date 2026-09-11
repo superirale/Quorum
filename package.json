@@ -8,6 +8,6 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "schemas": "pnpm --filter @quorum/protocol schemas",
-    "check": "pnpm -r --parallel typecheck && pnpm -r test"
+    "check": "pnpm -r typecheck && pnpm -r test"
   }
 }

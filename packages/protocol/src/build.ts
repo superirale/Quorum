@@ -27,6 +27,7 @@ import {
   encTag,
   groupTag,
   scopeTags,
+  tagValue,
   toTag,
   type Tag,
 } from './tags.ts'
@@ -178,6 +179,34 @@ function dedupePubkeyTags(tags: Tag[]): void {
     if (seen.has(key)) tags.splice(i, 1)
     else seen.add(key)
   }
+}
+
+/** This event, as something another event can point at. */
+export function refTo(event: { id: string; kind: number; pubkey: string }): EventRef {
+  return { id: event.id, kind: event.kind, pubkey: event.pubkey }
+}
+
+/**
+ * The thread root an event sits in, read back out of its NIP-22 scope tags.
+ *
+ * The inverse of {@link scopeTags}, and it lives beside it so the two cannot
+ * disagree about which tag holds what. A kind-11 event is its own root — that
+ * is what "the thread id is the root event's id" means — and an event with no
+ * `E` tag is not in a thread at all, which is normal for channel-level chat.
+ */
+export function threadRef(event: {
+  id: string
+  kind: number
+  pubkey: string
+  tags: readonly Tag[]
+}): EventRef | undefined {
+  if (event.kind === Kinds.Thread) return refTo(event)
+
+  const root = event.tags.find((t) => t[0] === TagName.RootEvent)
+  const kind = tagValue(event.tags, TagName.RootKind)
+  const pubkey = root?.[3] ?? tagValue(event.tags, TagName.RootPubkey)
+  if (!root?.[1] || kind === undefined || !pubkey) return undefined
+  return { id: root[1], kind: Number(kind), pubkey }
 }
 
 /** A NIP-7D thread root. Its id becomes the thread id for everything after it. */
