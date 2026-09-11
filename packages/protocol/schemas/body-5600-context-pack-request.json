@@ -1,0 +1,47 @@
+{
+  "$id": "https://quorum.chat/schemas/body-5600-context-pack-request.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "thread": {
+      "type": "string",
+      "description": "thread id — the kind:11 root event id"
+    },
+    "budget_tokens": {
+      "default": 2000,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "verbatim_only": {
+      "default": false,
+      "type": "boolean"
+    },
+    "include_kinds": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      }
+    },
+    "exclude_kinds": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      }
+    },
+    "since": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "seconds since the unix epoch"
+    }
+  },
+  "required": [
+    "thread"
+  ],
+  "title": "ContextPackRequest body (kind 5600)"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "quorum-spike",
+  "private": true,
+  "type": "module",
+  "description": "M0 throwaway spike. Proves the approval loop and stress-tests SDK ergonomics before anything becomes a published schema. Delete this directory once M1-M5 land.",
+  "scripts": {
+    "server": "node server.ts",
+    "agent": "node agent.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

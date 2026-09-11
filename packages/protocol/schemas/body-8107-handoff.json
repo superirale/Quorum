@@ -1,0 +1,24 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8107-handoff.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "to": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "lowercase hex secp256k1 x-only public key"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "anything the receiver needs that is not in the log"
+    }
+  },
+  "required": [
+    "to",
+    "reason"
+  ],
+  "title": "Handoff body (kind 8107)"
+}

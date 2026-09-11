@@ -1,0 +1,34 @@
+{
+  "$id": "https://quorum.chat/schemas/body-28101-interrupt.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "cancel",
+        "pause",
+        "steer"
+      ]
+    },
+    "scope": {
+      "default": "action",
+      "type": "string",
+      "enum": [
+        "action",
+        "thread"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "instruction": {
+      "description": "required in practice when mode is \"steer\"",
+      "type": "string"
+    }
+  },
+  "required": [
+    "mode"
+  ],
+  "title": "Interrupt body (kind 28101)"
+}

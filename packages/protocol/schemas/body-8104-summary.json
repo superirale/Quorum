@@ -1,0 +1,43 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8104-summary.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "from_event": {
+      "type": "string",
+      "description": "first event id covered"
+    },
+    "to_event": {
+      "type": "string",
+      "description": "last event id covered"
+    },
+    "covers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "how many events were summarised"
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "extractive",
+        "model"
+      ]
+    },
+    "model": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "text",
+    "from_event",
+    "to_event",
+    "covers",
+    "method"
+  ],
+  "title": "Summary body (kind 8104)"
+}

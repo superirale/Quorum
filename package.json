@@ -1,0 +1,13 @@
+{
+  "name": "quorum",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.25.0",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "schemas": "pnpm --filter @quorum/protocol schemas",
+    "check": "pnpm -r --parallel typecheck && pnpm -r test"
+  }
+}

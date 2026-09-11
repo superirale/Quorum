@@ -1,0 +1,51 @@
+{
+  "$id": "https://quorum.chat/schemas/nostr-event.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "pubkey": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "kind": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "content": {
+      "type": "string"
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{128}$"
+    }
+  },
+  "required": [
+    "id",
+    "pubkey",
+    "created_at",
+    "kind",
+    "tags",
+    "content",
+    "sig"
+  ],
+  "title": "Nostr event (NIP-01)"
+}

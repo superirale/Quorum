@@ -1,0 +1,26 @@
+{
+  "$id": "https://quorum.chat/schemas/body-28102-lease.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "monotonic per holder; higher wins ties"
+    },
+    "ttl_seconds": {
+      "default": 60,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "purpose": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "epoch"
+  ],
+  "title": "Lease body (kind 28102)"
+}

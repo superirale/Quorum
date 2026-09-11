@@ -1,0 +1,37 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8103-approval-response.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "approved",
+        "denied",
+        "expired"
+      ]
+    },
+    "reason": {
+      "type": "string"
+    },
+    "input_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    },
+    "modified_input": {},
+    "modified_input_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    },
+    "grant": {
+      "description": "addressable coordinate 38102:<pubkey>:<d>",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decision"
+  ],
+  "title": "ApprovalResponse body (kind 8103)"
+}

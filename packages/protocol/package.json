@@ -1,0 +1,33 @@
+{
+  "name": "@quorum/protocol",
+  "version": "0.1.0",
+  "description": "Quorum: kind allocation, tag conventions and validators for an agent-first messaging protocol on Nostr",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schemas/*": "./schemas/*"
+  },
+  "files": ["dist", "schemas"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schemas": "node --experimental-strip-types scripts/gen-schemas.ts",
+    "fixtures": "node --experimental-strip-types scripts/gen-fixtures.ts",
+    "check-registry": "node --experimental-strip-types scripts/check-registry.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:python": "python3 scripts/validate.py fixtures/deploy-approval.json && python3 scripts/validate.py fixtures/deploy-approval.json --self-test"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

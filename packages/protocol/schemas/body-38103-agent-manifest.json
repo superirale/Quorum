@@ -1,0 +1,93 @@
+{
+  "$id": "https://quorum.chat/schemas/body-38103-agent-manifest.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "operator": {
+      "description": "the human accountable for this agent",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "homepage": {
+      "type": "string"
+    },
+    "model": {
+      "description": "informational, e.g. \"claude-opus-5\"",
+      "type": "string"
+    },
+    "wants": {
+      "default": [],
+      "description": "shown to a human at install time, with the stated reason",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "minLength": 1,
+            "description": "e.g. \"action:deploy.production\""
+          },
+          "actions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "e.g. [\"invoke\"]"
+          },
+          "scope": {
+            "description": "narrowing constraints, e.g. {\"env\": \"production\"}",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "expires_at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "seconds since the unix epoch"
+          },
+          "max_uses": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "resource",
+          "actions",
+          "why"
+        ]
+      }
+    },
+    "instances": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+        "description": "lowercase hex secp256k1 x-only public key"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "description"
+  ],
+  "title": "AgentManifest body (kind 38103)"
+}

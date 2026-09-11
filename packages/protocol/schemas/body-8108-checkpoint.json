@@ -1,0 +1,47 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8108-checkpoint.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "from": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "start of the covered window, inclusive"
+    },
+    "to": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "end of the covered window, inclusive"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "number of events covered"
+    },
+    "merkle_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    },
+    "algorithm": {
+      "default": "sha256-merkle-sorted-v1",
+      "type": "string",
+      "const": "sha256-merkle-sorted-v1"
+    },
+    "prev": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    }
+  },
+  "required": [
+    "from",
+    "to",
+    "count",
+    "merkle_root"
+  ],
+  "title": "Checkpoint body (kind 8108)"
+}

@@ -1,0 +1,37 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8106-artifact.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mime": {
+      "type": "string",
+      "minLength": 1
+    },
+    "url": {
+      "description": "e.g. a Blossom or HTTP URL",
+      "type": "string"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "mime"
+  ],
+  "title": "Artifact body (kind 8106)"
+}

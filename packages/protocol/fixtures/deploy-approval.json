@@ -1,0 +1,536 @@
+{
+  "description": "The M0 deploy loop as signed Nostr events: request, proposal, approval, execution.",
+  "group": "payments",
+  "thread": "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+  "action": "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613",
+  "input_digest": "71f56d2889b54c385b46729075f2037091e2a2883a23cb4ec8fb2419cc4965ff",
+  "actors": {
+    "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2": {
+      "name": "Ada",
+      "kind": "human"
+    },
+    "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf": {
+      "name": "Deploy Bot",
+      "kind": "agent"
+    },
+    "cf555527ca5213952c0e6dca37d0cd32f11d35190cf09e3353fa1bdde3a9ce0f": {
+      "name": "reference relay",
+      "kind": "relay"
+    }
+  },
+  "events": [
+    {
+      "pubkey": "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+      "created_at": 1757000000,
+      "kind": 11,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "title",
+          "Ship the payments hotfix"
+        ],
+        [
+          "p",
+          "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+          "",
+          "to"
+        ],
+        [
+          "counter",
+          "1"
+        ]
+      ],
+      "content": "Charge capture is double-billing on retry. Please get a1b2c3d out.",
+      "id": "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+      "sig": "972169b01e30d21e87390eb0b0b3302e6c8e59c7cf79dbc21aed0cd9289c7a31aa73ab3659bde2de430efdc4668b4380af690f2d842c5f349ce816df6e7b55e7"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000004,
+      "kind": 1111,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "counter",
+          "1"
+        ]
+      ],
+      "content": "Looking at this now.",
+      "id": "772f57a6516ed8f225a64bc3092e0a9467b098442cd20c64dfefbc235a9da295",
+      "sig": "823cdd1f82287d6a026771cfc3f0a2d7ed1c1cb9d52cec6293bef5be79d9d2fc24287c144f8ccb4e2bad053cfc420b4abe569f364b372b09b7d7f92312b107c1"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000005,
+      "kind": 8101,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "counter",
+          "2"
+        ],
+        [
+          "alt",
+          "[deploy.production] proposed: Deploy payments-api@a1b2c3d to production"
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"input\":{\"env\":\"production\",\"ref\":\"a1b2c3d\",\"service\":\"payments-api\"},\"input_digest\":\"71f56d2889b54c385b46729075f2037091e2a2883a23cb4ec8fb2419cc4965ff\",\"name\":\"deploy.production\",\"status\":\"proposed\",\"summary\":\"Deploy payments-api@a1b2c3d to production\"}",
+      "id": "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613",
+      "sig": "94dd6572725bd32faf0d7d81edb994177c73ed4560fc64b16915f8fd9c65a8b371bf68e1e6c4189db173be3e24ee135b8f250f485871b15dac0f32b8d3ef2c5a"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000006,
+      "kind": 8101,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "action",
+          "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613"
+        ],
+        [
+          "counter",
+          "3"
+        ],
+        [
+          "alt",
+          "[deploy.production] awaiting_approval: Deploy payments-api@a1b2c3d to production"
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"name\":\"deploy.production\",\"status\":\"awaiting_approval\",\"summary\":\"Deploy payments-api@a1b2c3d to production\"}",
+      "id": "aca2e526ea574d6ed4b7a2b38efbaed78e54d2d6d9a241b6239fcb57e606f3c5",
+      "sig": "4459caf5ea365a52447a0de2d7fa134ad32b12433fb253ab297352da2cc63a1f9d7ff748a2497cbb9e51bd1c6f2988bd576b04bd75e4cddd78bf4d6a7924e813"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000006,
+      "kind": 8102,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          "",
+          "to"
+        ],
+        [
+          "action",
+          "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613"
+        ],
+        [
+          "counter",
+          "4"
+        ],
+        [
+          "alt",
+          "Approval requested (high risk): Deploy payments-api to production"
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"expires_at\":1757000606,\"input_digest\":\"71f56d2889b54c385b46729075f2037091e2a2883a23cb4ec8fb2419cc4965ff\",\"requested_grant\":{\"actions\":[\"invoke\"],\"expires_at\":1757000606,\"resource\":\"action:deploy.production\",\"scope\":{\"env\":\"production\"}},\"required\":1,\"risk\":\"high\",\"summary\":\"Deploys a1b2c3d (hotfix: retry idempotency on charge capture). Affects 3 pods, rolling. Roughly 90s of mixed-version traffic.\",\"title\":\"Deploy payments-api to production\"}",
+      "id": "f27d2e3952f74f06fc4571ced6c5f4b7c415c2b50cabc582e6896735baadf2f9",
+      "sig": "1ccf5f54a0ed0e9d68aedf2ca3191d06779e0dc2c4a178c9e27550583ca33728731ef31e250bf8d2de12651cde9164f5c7dd3ee1643b18eddcb3bd934f62420b"
+    },
+    {
+      "pubkey": "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+      "created_at": 1757000041,
+      "kind": 8103,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "f27d2e3952f74f06fc4571ced6c5f4b7c415c2b50cabc582e6896735baadf2f9",
+          "",
+          "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf"
+        ],
+        [
+          "k",
+          "8102"
+        ],
+        [
+          "p",
+          "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+          "",
+          "to"
+        ],
+        [
+          "action",
+          "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613"
+        ],
+        [
+          "counter",
+          "2"
+        ],
+        [
+          "alt",
+          "Approval approved: Freeze window does not apply to sev-2 hotfixes."
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"decision\":\"approved\",\"input_digest\":\"71f56d2889b54c385b46729075f2037091e2a2883a23cb4ec8fb2419cc4965ff\",\"reason\":\"Freeze window does not apply to sev-2 hotfixes.\"}",
+      "id": "b3c2563cb9a11904c0dc682789d167d0005920159fcb465848c42cb2a1c91a72",
+      "sig": "15d7f3e6603b225227d6bd94aa6ec2e50f7d027919472c511fc4a5135011f49380b112956e37f831adc8664f7e2857b1f7574cd102397c814540d7e398b8565b"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000042,
+      "kind": 8101,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "action",
+          "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613"
+        ],
+        [
+          "counter",
+          "5"
+        ],
+        [
+          "alt",
+          "[deploy.production] running: Deploy payments-api@a1b2c3d to production"
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"name\":\"deploy.production\",\"status\":\"running\",\"summary\":\"Deploy payments-api@a1b2c3d to production\"}",
+      "id": "bed1f67fdc0906d77d26609df969bfc283f4178ee5984d73889be24b6acc1ced",
+      "sig": "4c3ddf843309f907cb13df20430d874ec159287f3d0490bc71ebd9449c6696cc1d687de401f5e32b1128d17a8aa612af3dd7df8c203eea6bece7c7cf007a394c"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000133,
+      "kind": 8101,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "action",
+          "de308a5dbc69adf365731d5d2e900a78366aa89405b5bf387b1b8af8dff02613"
+        ],
+        [
+          "counter",
+          "6"
+        ],
+        [
+          "alt",
+          "[deploy.production] succeeded: Rolled out to 3/3 pods. Health checks green. 0 errors in 60s."
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"cost\":{\"tokens_in\":4210,\"tokens_out\":380,\"usd\":0.06},\"name\":\"deploy.production\",\"output_summary\":\"Rolled out to 3/3 pods. Health checks green. 0 errors in 60s.\",\"status\":\"succeeded\",\"summary\":\"Deploy payments-api@a1b2c3d to production\"}",
+      "id": "613c2ad4464a9beb22f3f80634bdcf71c2128dd2d28f9d1ec5f495db45a366a9",
+      "sig": "5431b1c21705c848480b557611864a48d8c969aceea2727fac8283128352fc402fa1a300fbb1471a4bb8a0748558c683fadfa606509dbdfe85d75760196a78a0"
+    },
+    {
+      "pubkey": "36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf",
+      "created_at": 1757000134,
+      "kind": 1111,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "E",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "K",
+          "11"
+        ],
+        [
+          "P",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          ""
+        ],
+        [
+          "e",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85",
+          "",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2"
+        ],
+        [
+          "k",
+          "11"
+        ],
+        [
+          "p",
+          "5d4ea6efac806a4a3224be562f86ce1fb5a2a7a661c3de0d943d5f71c97accc2",
+          "",
+          "to"
+        ],
+        [
+          "counter",
+          "7"
+        ]
+      ],
+      "content": "Deployed and healthy. Rolling back is one word away if you need it.",
+      "id": "ef899013444ac7a91d8f0213aa5eb1c4147dbb294c07188302430a435327a9ed",
+      "sig": "52aaca9d183edfa7edc88d29186f6d652a7c2d3eb75c9cbf55b709482beecf6963016b255630378110c45458ac0596f047654f2af58c52dbe063e6be03fca7bc"
+    },
+    {
+      "pubkey": "cf555527ca5213952c0e6dca37d0cd32f11d35190cf09e3353fa1bdde3a9ce0f",
+      "created_at": 1757000135,
+      "kind": 38101,
+      "tags": [
+        [
+          "h",
+          "payments"
+        ],
+        [
+          "d",
+          "3699d3ddc5d0f478c6369047981aa183f15e65a01b3583b9ac1a96bd30d63f85"
+        ],
+        [
+          "counter",
+          "1"
+        ],
+        [
+          "alt",
+          "Task done, assigned to 36476c5c…"
+        ],
+        [
+          "quorum",
+          "quorum/0.1"
+        ]
+      ],
+      "content": "{\"assignee\":\"36476c5ce03b4e73b3004d83d74e0edc9f40e35fd00e1e39e693e9f4db043baf\",\"folded_from\":[],\"spent\":{\"tokens_in\":4210,\"tokens_out\":380,\"usd\":0.06},\"status\":\"done\",\"title\":\"Ship the payments hotfix\",\"updated_at\":1757000135}",
+      "id": "e9e08e3d22c13aef8c6dd8276cfff4e546de2b9fbbe1ecbedffd179cf8a66326",
+      "sig": "961f5add1aaf75b7856dafe800ac5fff9d99f0de721ada1c2ce1c4f9476c53db6f5cc75965d7ae11ab776bdef7fcb576ca62d7ca6a10369562abb5f904bb0e3b"
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+{
+  "$id": "https://quorum.chat/schemas/body-6600-context-pack-result.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "thread": {
+      "type": "string"
+    },
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "seconds since the unix epoch"
+          },
+          "text": {
+            "type": "string"
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "pubkey": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "description": "lowercase hex secp256k1 x-only public key"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "agent",
+                  "relay"
+                ]
+              },
+              "trust": {
+                "type": "string",
+                "enum": [
+                  "self",
+                  "operator",
+                  "member",
+                  "untrusted"
+                ]
+              },
+              "display_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pubkey",
+              "kind",
+              "trust"
+            ]
+          },
+          "truncated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "mandatory": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "event_id",
+          "kind",
+          "created_at",
+          "text",
+          "provenance"
+        ]
+      }
+    },
+    "used_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "budget_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "dropped_events": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "algorithm": {
+      "default": "extractive-v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "thread",
+    "segments",
+    "used_tokens",
+    "budget_tokens",
+    "dropped_events"
+  ],
+  "title": "ContextPackResult body (kind 6600)"
+}

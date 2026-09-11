@@ -1,0 +1,89 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8102-approval-request.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "enough for a human to decide without opening anything"
+    },
+    "risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "input_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of the canonical JSON encoding"
+    },
+    "requested_grant": {
+      "type": "object",
+      "properties": {
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. \"action:deploy.production\""
+        },
+        "actions": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "e.g. [\"invoke\"]"
+        },
+        "scope": {
+          "description": "narrowing constraints, e.g. {\"env\": \"production\"}",
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "seconds since the unix epoch"
+        },
+        "max_uses": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "resource",
+        "actions"
+      ]
+    },
+    "expires_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "seconds since the unix epoch"
+    },
+    "required": {
+      "default": 1,
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "required": [
+    "title",
+    "summary",
+    "risk"
+  ],
+  "title": "ApprovalRequest body (kind 8102)"
+}

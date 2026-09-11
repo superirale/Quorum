@@ -1,0 +1,172 @@
+{
+  "$id": "https://quorum.chat/schemas/index.json",
+  "protocol": "quorum",
+  "version": "0.1",
+  "generated_by": "@quorum/protocol scripts/gen-schemas.ts",
+  "note": "Kind numbers are provisional until the Quorum NIP PR merges.",
+  "kinds": {
+    "5600": {
+      "name": "ContextPackRequest",
+      "body": "body-5600-context-pack-request.json",
+      "requires": {}
+    },
+    "6600": {
+      "name": "ContextPackResult",
+      "body": "body-6600-context-pack-result.json",
+      "requires": {}
+    },
+    "8101": {
+      "name": "Action",
+      "body": "body-8101-action.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "8102": {
+      "name": "ApprovalRequest",
+      "body": "body-8102-approval-request.json",
+      "requires": {
+        "threaded": true,
+        "addressed": true
+      }
+    },
+    "8103": {
+      "name": "ApprovalResponse",
+      "body": "body-8103-approval-response.json",
+      "requires": {
+        "threaded": true,
+        "parentKind": 8102
+      }
+    },
+    "8104": {
+      "name": "Summary",
+      "body": "body-8104-summary.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "8105": {
+      "name": "Error",
+      "body": "body-8105-error.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "8106": {
+      "name": "Artifact",
+      "body": "body-8106-artifact.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "8107": {
+      "name": "Handoff",
+      "body": "body-8107-handoff.json",
+      "requires": {
+        "threaded": true,
+        "addressed": true
+      }
+    },
+    "8108": {
+      "name": "Checkpoint",
+      "body": "body-8108-checkpoint.json",
+      "requires": {}
+    },
+    "8109": {
+      "name": "ThreadOp",
+      "body": "body-8109-thread-op.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "28101": {
+      "name": "Interrupt",
+      "body": "body-28101-interrupt.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "28102": {
+      "name": "Lease",
+      "body": "body-28102-lease.json",
+      "requires": {
+        "threaded": true
+      }
+    },
+    "28103": {
+      "name": "Presence",
+      "body": "body-28103-presence.json",
+      "requires": {}
+    },
+    "38101": {
+      "name": "ThreadState",
+      "body": "body-38101-thread-state.json",
+      "requires": {}
+    },
+    "38102": {
+      "name": "CapabilityGrant",
+      "body": "body-38102-capability-grant.json",
+      "requires": {}
+    },
+    "38103": {
+      "name": "AgentManifest",
+      "body": "body-38103-agent-manifest.json",
+      "requires": {}
+    },
+    "38104": {
+      "name": "AgentMemory",
+      "body": "body-38104-agent-memory.json",
+      "requires": {}
+    },
+    "38105": {
+      "name": "AgentCursor",
+      "body": "body-38105-agent-cursor.json",
+      "requires": {}
+    },
+    "38106": {
+      "name": "Delegation",
+      "body": "body-38106-delegation.json",
+      "requires": {}
+    }
+  },
+  "supported_kinds": [
+    "9",
+    "11",
+    "1111",
+    "5",
+    "8101",
+    "8102",
+    "8103",
+    "8104",
+    "8105",
+    "8106",
+    "8107",
+    "8108",
+    "8109",
+    "28101",
+    "28102",
+    "28103",
+    "38101",
+    "38102",
+    "38103",
+    "38104",
+    "38105",
+    "38106",
+    "5600",
+    "6600"
+  ],
+  "envelope": {
+    "required_tags": [
+      "h",
+      "alt"
+    ],
+    "alt_max_length": 280,
+    "enc_modes": [
+      "plaintext",
+      "nip44",
+      "mls"
+    ],
+    "address_marker": "to",
+    "content": "canonical JSON (RFC 8785) of the body schema, or plain text for kinds 9, 11 and 1111"
+  }
+}

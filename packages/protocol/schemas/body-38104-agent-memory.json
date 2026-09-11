@@ -1,0 +1,18 @@
+{
+  "$id": "https://quorum.chat/schemas/body-38104-agent-memory.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "value": {},
+    "updated_at": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "seconds since the unix epoch"
+    }
+  },
+  "required": [
+    "value"
+  ],
+  "title": "AgentMemory body (kind 38104)"
+}

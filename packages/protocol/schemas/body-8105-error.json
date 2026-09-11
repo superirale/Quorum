@@ -1,0 +1,25 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8105-error.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "code": {
+      "type": "string",
+      "minLength": 1
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "retryable": {
+      "default": false,
+      "type": "boolean"
+    },
+    "detail": {}
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "title": "Error body (kind 8105)"
+}
