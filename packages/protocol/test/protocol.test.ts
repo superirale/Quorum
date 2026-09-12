@@ -115,6 +115,27 @@ describe('addressing', () => {
     assert.ok(!isAddressedTo(event.tags, 'ff'.repeat(32)), 'a mention is not an address')
   })
 
+  test('a parent with no thread is refused rather than silently dropped', () => {
+    // It used to be dropped: `build()` emitted the scope tags only when a
+    // thread was present, so asking for a parent and nothing else produced an
+    // event with no `e` tag at all — a reply referring to nothing. Everything
+    // downstream rejects that event, but each of them reports it as malformed
+    // somewhere far from the line that built it. Found while writing the
+    // console's tests, where it cost an afternoon.
+    assert.throws(
+      () =>
+        build({
+          kind: RegularKinds.ApprovalResponse,
+          pubkey: ADA,
+          group: GROUP,
+          parent: { id: 'aa'.repeat(32), kind: RegularKinds.ApprovalRequest, pubkey: BOT },
+          counter: 1,
+          body: { decision: 'approved' },
+        }),
+      /needs a `thread`/,
+    )
+  })
+
   test('a NIP-22 parent author is not addressed by that alone', () => {
     // The collision that forced the marker: NIP-22 says a comment MUST p-tag
     // the parent's author. Without the marker, every reply would look like an

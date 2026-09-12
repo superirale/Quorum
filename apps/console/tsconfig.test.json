@@ -1,0 +1,12 @@
+// Type-checks the tests, which the build config leaves out. Same reasoning as
+// packages/sdk/tsconfig.test.json: type stripping erases without reading, so an
+// unchecked test can call a method that does not exist and fail somewhere else
+// entirely, or not at all.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

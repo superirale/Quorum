@@ -109,6 +109,19 @@ export function build(options: BuildOptions): UnsignedEvent {
 
   const tags: Tag[] = [groupTag(group)]
 
+  // A parent with no thread used to be dropped in silence, which is the worst
+  // available answer: the caller asked for a causal link and got an event
+  // carrying no `e` tag at all. NIP-22 is right that a parent without a root
+  // scope is not a comment — `E`/`K`/`P` are mandatory — so the fix is to
+  // refuse rather than to emit half of it. Everything downstream already
+  // rejects the unlinked event (the relay's `RejectUnaskedApprovals`, the
+  // validator, `verifyActionChain`), and each of those reports it as a
+  // malformed event somewhere far from the line that built it.
+  if (parent && !thread) {
+    throw new Error(
+      'a `parent` needs a `thread`: NIP-22 requires the root scope (E/K/P) alongside the parent (e/k/p)',
+    )
+  }
   if (thread) {
     tags.push(...scopeTags(thread, parent ?? thread, relayHint))
   }

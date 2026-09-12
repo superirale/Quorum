@@ -1,0 +1,28 @@
+{
+  "name": "@quorum/console",
+  "version": "0.1.0",
+  "description": "Quorum: the operator console — create a workspace, hand out capabilities, and sign or refuse what an agent proposes",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "quorum": "./src/main.ts"
+  },
+  "scripts": {
+    "precli": "pnpm --filter @quorum/sdk build",
+    "cli": "node --experimental-strip-types src/main.ts",
+    "pretest": "pnpm --filter @quorum/sdk --filter @quorum/test-kit build",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "pretypecheck": "pnpm --filter @quorum/sdk --filter @quorum/test-kit build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@quorum/protocol": "workspace:*",
+    "@quorum/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@quorum/test-kit": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

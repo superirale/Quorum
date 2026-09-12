@@ -26,6 +26,7 @@ import {
   LocalSigner,
   MemoryStore,
   approvalResponse,
+  conclusion,
   createAgent,
   verifyActionChain,
   verifyActionChains,
@@ -52,7 +53,9 @@ interface Run {
  * The whole loop, for real: a human asks, an agent proposes, the human signs,
  * the agent deploys. What comes back is the log a relay would have.
  */
-async function deployed(options: { modifiedInput?: unknown } = {}): Promise<Run> {
+async function deployed(
+  options: { modifiedInput?: unknown; decision?: 'approved' | 'denied' } = {},
+): Promise<Run> {
   const h = await harness()
   const ada = await Actor.create(h.relay.url, h.group)
   const agentKey = LocalSigner.generate()
@@ -88,7 +91,7 @@ async function deployed(options: { modifiedInput?: unknown } = {}): Promise<Run>
   await ada.publish(
     approvalResponse({
       request: request!,
-      decision: 'approved',
+      decision: options.decision ?? 'approved',
       ...(options.modifiedInput !== undefined ? { modifiedInput: options.modifiedInput } : {}),
     }),
   )
@@ -492,5 +495,95 @@ describe('what is not tampering', () => {
       'a proposal carries no `action` tag: it names the chain by being its first event',
     )
     assert.equal(chains[1]!.actionId, proposed.id)
+  })
+})
+
+/**
+ * The sentence an operator actually reads.
+ *
+ * Every field `verifyActionChain` produces was already correct when these were
+ * written; what was wrong was the English composed from them, in two renderers
+ * that each rolled their own. A denial counts as a counted response, so both
+ * announced *"approved exactly this, and exactly this ran"* over an action a
+ * human had explicitly refused and which never ran. Nothing else caught it
+ * because no test asserted on prose — the chain was `ok`, its status was
+ * `denied`, and both were displayed right above the lie.
+ */
+describe('conclusion', () => {
+  it('says what ran when something ran', async (t) => {
+    const run = await deployed()
+    t.after(() => run.finish())
+    assert.match(conclusion(run.chain())!, /approved exactly this, and exactly this ran\./)
+  })
+
+  it('does not claim a denied action was approved or ran', async (t) => {
+    const run = await deployed({ decision: 'denied' })
+    t.after(() => run.finish())
+
+    const chain = run.chain()
+    assert.equal(chain.status, 'denied')
+    assert.equal(chain.ok, true, 'a refusal that was honoured is a chain in good order')
+    assert.equal(chain.executedDigest, undefined, 'nothing ran, so there is no executed digest')
+
+    const said = conclusion(chain)!
+    assert.match(said, /denied this, and it never ran\./)
+    assert.doesNotMatch(said, /approved/)
+  })
+
+  it('does not report a failed attempt as something that ran', async (t) => {
+    const run = await deployed()
+    t.after(() => run.finish())
+
+    // The live case: a human approves, the agent starts, and the resource then
+    // refuses for want of a capability. The approval is real and the bytes are
+    // the approved ones — but nothing was deployed.
+    const failed = await transition(run.agent, run, find(run.events, 'running'), {
+      status: 'failed',
+      input_digest: digest(INPUT),
+    })
+    const chain = verifyActionChains([
+      ...without(run.events, isStatus('succeeded')),
+      failed,
+    ])[0]!
+
+    assert.equal(chain.status, 'failed')
+    assert.equal(chain.ok, true)
+    const said = conclusion(chain)!
+    assert.match(said, /attempted under those bytes and failed\./)
+    assert.doesNotMatch(said, /exactly this ran/)
+  })
+
+  it('offers no verdict on a chain that does not verify', () => {
+    assert.equal(
+      conclusion({
+        actionId: 'a',
+        name: 'deploy',
+        status: 'succeeded',
+        ok: false,
+        modified: false,
+        executedDigest: 'd',
+        approvals: [{ pubkey: 'p', decision: 'approved', at: 0, counted: true, event: {} as NostrEvent }],
+        events: [],
+        issues: [{ code: 'x', message: 'x', severity: 'error' }],
+      }),
+      undefined,
+      'a broken chain gets its errors printed, not a reassuring summary',
+    )
+  })
+
+  it('offers no verdict on an execution nobody was ever asked about', async (t) => {
+    const run = await deployed()
+    t.after(() => run.finish())
+
+    // With the whole approval exchange removed the action still ran, which is
+    // a warning rather than an error — an agent acting inside its grant needs
+    // no gate. So the chain is `ok` and there is nobody to name, and a sentence
+    // naming nobody would read as consent from somebody.
+    const chain = verifyActionChains(
+      without(run.events, (e) => e.kind === Kinds.ApprovalRequest || e.kind === Kinds.ApprovalResponse),
+    )[0]!
+    assert.ok(warnings(chain).includes('ungated_execution'))
+    assert.equal(chain.ok, true)
+    assert.equal(conclusion(chain), undefined)
   })
 })

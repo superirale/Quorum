@@ -32,6 +32,7 @@ import { join } from 'node:path'
 import { Kinds, type NostrEvent } from '@quorum/protocol'
 import {
   authorize,
+  conclusion,
   effectiveAddressable,
   verifyActionChains,
   type ActionChain,
@@ -149,11 +150,11 @@ function report(chain: ActionChain): void {
   }
 
   // The sentence the milestone exists for. Not "the dashboard says so" — this
-  // is a statement about which keys signed which bytes.
-  if (chain.ok && counted.length) {
-    const who = counted.map((a) => short(a.pubkey)).join(', ')
-    console.log(`  \x1b[1m→ ${who} approved exactly this, and exactly this ran.\x1b[0m`)
-  }
+  // is a statement about which keys signed which bytes. Composed in the SDK
+  // beside the chain it describes, because this file and the console both used
+  // to write their own and both got a denied chain wrong the same way.
+  const verdict = conclusion(chain)
+  if (verdict) console.log(`  \x1b[1m→ ${verdict}\x1b[0m`)
 }
 
 function short(hex: string): string {

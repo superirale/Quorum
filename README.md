@@ -27,6 +27,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`packages/sdk`](packages/sdk) | Agent SDK — signers, client, addressing, `once()`, replay, leases |
 | [`packages/test-kit`](packages/test-kit) | In-process relay + chaos helpers, so agents are testable with no infra |
 | [`apps/relay`](apps/relay) | Reference relay — khatru + relay29 + the Quorum policies (Go) |
+| [`apps/console`](apps/console) | `quorum` — the operator CLI: be the human in the loop from a terminal |
 | [`examples/echo-agent`](examples/echo-agent) | The smallest complete agent, and a narrated demo of why each part is there |
 | [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
@@ -51,6 +52,12 @@ that signature itself before doing anything. Grants are signed addressable event
 the resource; a delegation intersects with them and can only ever narrow. The whole chain
 verifies offline, from the events alone, with no relay and no server.
 
+**The operator console** ([`apps/console`](apps/console)) closes the gap those milestones left:
+agents had a way into a workspace and humans did not. `quorum` creates the group, issues the
+grant, posts the request, and signs or refuses what comes back — the same loop the demos narrate,
+driven by hand. It is also the headless path after M5, since nobody scripts a workspace from a
+web UI.
+
 Next: M5, the reference client.
 
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
@@ -64,7 +71,7 @@ pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the 
 
 pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
 
-pnpm check                                   # 180 tests: protocol 48, test-kit 17, sdk 115
+pnpm check                                   # 235 tests: protocol 49, test-kit 17, sdk 120, console 49
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -87,6 +94,16 @@ To see the same thing over a real socket against the Go relay:
 cd apps/relay && make run                    # :3334, in another terminal
 pnpm --filter @quorum/echo-agent live
 pnpm --filter @quorum/deploy-agent live      # also checks the relay refuses three forgeries
+```
+
+Or drive it yourself, as the human the agent is asking. [`apps/console`](apps/console) has the
+full walkthrough; the short version is a keypair, a group, a grant, and then:
+
+```sh
+q say "deploy api 1.4.2 to production with 3 replicas" --to bot
+q inbox
+q approve fd908596 --set replicas=5          # sign consent to the edit, not to the proposal
+q audit
 ```
 
 Of the tests, the Python check is the one worth running. It validates the signed transcript

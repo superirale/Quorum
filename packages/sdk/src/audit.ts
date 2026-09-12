@@ -304,6 +304,60 @@ export function verifyActionChain(
   return finish(chain)
 }
 
+/**
+ * The one-sentence verdict on a chain, or nothing if it does not warrant one.
+ *
+ * This lives here rather than in each renderer because it was written twice —
+ * once in the console's `audit`, once in the offline `verify` — and both copies
+ * said *"approved exactly this, and exactly this ran"* for any chain that
+ * verified and had a counted response. A denial is a counted response. So a
+ * deploy a human explicitly refused, which correctly never ran, was reported to
+ * the operator as approved and executed. The chain data was right the whole
+ * time; only the sentence about it was wrong, in the two places nobody would
+ * cross-check.
+ *
+ * The rule is that the sentence may only claim what the chain's own fields say:
+ * `executedDigest` is set if and only if the action reached `running`, and the
+ * decisions are read rather than assumed.
+ */
+export function conclusion(chain: ActionChain): string | undefined {
+  if (!chain.ok) return undefined
+
+  const counted = chain.approvals.filter((a) => a.counted)
+  if (!counted.length) return undefined
+
+  const who = (decision: Decision) =>
+    counted
+      .filter((a) => a.decision === decision)
+      .map((a) => short(a.pubkey))
+      .join(', ')
+
+  const approved = who('approved')
+  const denied = who('denied')
+
+  if (chain.executedDigest) {
+    if (!approved) {
+      // Belt and braces: reaching `running` with only denials is already an
+      // error-severity issue, so `ok` should be false. If that ever stops being
+      // true, this must not be the line that papers over it.
+      return `${denied} refused this and it ran anyway — do not trust this chain.`
+    }
+    // `running` was reached, so the attempt happened under the approved bytes —
+    // but "exactly this ran" over a chain whose status is `failed` claims an
+    // outcome the log denies. A deploy the resource refused for want of a
+    // capability is the common case here, and it is the one an operator most
+    // needs not to misread.
+    if (chain.status === 'failed') {
+      return `${approved} approved exactly this; it was attempted under those bytes and failed.`
+    }
+    return `${approved} approved exactly this, and exactly this ran.`
+  }
+
+  if (denied) return `${denied} denied this, and it never ran.`
+  if (chain.status === 'cancelled') return `${approved} approved this, but it was cancelled before it ran.`
+  return `${approved} approved this; it has not run yet.`
+}
+
 // --- helpers -----------------------------------------------------------------
 
 function finish(chain: ActionChain): ActionChain {
