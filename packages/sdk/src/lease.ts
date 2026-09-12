@@ -44,7 +44,6 @@
  * rests on this.
  */
 
-import { randomUUID } from 'node:crypto'
 import {
   EphemeralKinds,
   LeaseBody,
@@ -56,6 +55,22 @@ import type { RelayClient, Subscription } from './client.ts'
 import { controlFilter } from './addressing.ts'
 import type { Publisher } from './publish.ts'
 import type { Store } from './store.ts'
+
+/**
+ * A fresh instance id.
+ *
+ * The Web Crypto global rather than `node:crypto`, because this module has to
+ * bundle for the browser — the reference client holds leases too, and one
+ * Node-only import in a shared module is enough to make the whole SDK
+ * unbundleable. Present in Node 19+ and in every browser over https or
+ * localhost; the fallback is for an insecure context, where the value is still
+ * only an identifier for "which process is this", never a secret.
+ */
+function instanceId(): string {
+  const webcrypto = globalThis.crypto
+  if (typeof webcrypto?.randomUUID === 'function') return webcrypto.randomUUID()
+  return `i${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+}
 
 export interface LeaseOptions {
   ttlSeconds?: number
@@ -109,7 +124,7 @@ export class LeaseManager {
   private readonly claims = new Map<string, Map<string, Claim>>()
   private readonly held = new Map<string, { thread: EventRef; timer: ReturnType<typeof setInterval> }>()
   private readonly options: Required<LeaseOptions>
-  private readonly instance = randomUUID()
+  private readonly instance = instanceId()
   private subscription: Subscription | undefined
   private epoch = 0
 

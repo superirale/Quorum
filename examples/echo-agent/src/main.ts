@@ -25,7 +25,8 @@
  */
 
 import { Kinds } from '@quorum/protocol'
-import { FileStore, LocalSigner, createAgent } from '@quorum/sdk'
+import { LocalSigner, createAgent } from '@quorum/sdk'
+import { FileStore } from '@quorum/sdk/node'
 
 const relay = process.env.QUORUM_RELAY ?? 'ws://localhost:3334'
 const group = process.env.QUORUM_GROUP ?? 'payments'

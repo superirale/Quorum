@@ -78,16 +78,25 @@ export class LocalSigner implements Signer {
   }
 
   /**
-   * From an environment variable, accepting either encoding.
+   * Either encoding, whichever a human happened to paste.
+   *
+   * One place decides, because "is it hex or an nsec" is the kind of branch
+   * that gets written three times and gets the nsec path wrong in two of them.
+   */
+  static from(value: string): LocalSigner {
+    const trimmed = value.trim()
+    return trimmed.startsWith('nsec1') ? LocalSigner.fromNsec(trimmed) : LocalSigner.fromHex(trimmed)
+  }
+
+  /**
+   * From an environment variable.
    *
    * Agents are processes, and a process gets its identity from its environment.
-   * Making this one call means nobody writes the "is it hex or nsec" branch
-   * themselves and gets it subtly wrong on the nsec path.
    */
   static fromEnv(name: string, env: Record<string, string | undefined> = process.env): LocalSigner {
     const value = env[name]?.trim()
     if (!value) throw new Error(`${name} is not set; an agent needs a key to have an identity`)
-    return value.startsWith('nsec1') ? LocalSigner.fromNsec(value) : LocalSigner.fromHex(value)
+    return LocalSigner.from(value)
   }
 
   /** Synchronous accessor, for the many places that just need the hex pubkey. */

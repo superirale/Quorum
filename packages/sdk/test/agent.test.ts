@@ -17,13 +17,13 @@ import { Kinds, digest, refTo, threadRef } from '@quorum/protocol'
 import { settle, waitFor, waitForCount } from '@quorum/test-kit'
 import {
   Cursor,
-  FileStore,
   LocalSigner,
   MemoryStore,
   createAgent,
   hasRun,
   type Store,
 } from '../src/index.ts'
+import { FileStore } from '../src/store-file.ts'
 import { Actor, assertAllValid, deferred, harness, tempDir, text } from './harness.ts'
 
 describe('addressing', () => {

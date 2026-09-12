@@ -28,6 +28,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`packages/test-kit`](packages/test-kit) | In-process relay + chaos helpers, so agents are testable with no infra |
 | [`apps/relay`](apps/relay) | Reference relay — khatru + relay29 + the Quorum policies (Go) |
 | [`apps/console`](apps/console) | `quorum` — the operator CLI: be the human in the loop from a terminal |
+| [`apps/web`](apps/web) | Reference client (React) — the approvals queue, with the payload editable field by field |
 | [`examples/echo-agent`](examples/echo-agent) | The smallest complete agent, and a narrated demo of why each part is there |
 | [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
@@ -58,7 +59,12 @@ grant, posts the request, and signs or refuses what comes back — the same loop
 driven by hand. It is also the headless path after M5, since nobody scripts a workspace from a
 web UI.
 
-Next: M5, the reference client.
+**M5 started** — the reference client ([`apps/web`](apps/web)), sliced to the screen that
+matters: the approvals queue. An agent's proposal arrives as a card showing the payload field
+by field; you can change a value before you agree, and what gets signed is a digest of exactly
+what is on screen. Action chains are verified in the browser from the signatures, by the same
+function the offline auditor runs. Still to come: the thread list with task status, agent
+presence, and a grant inspector.
 
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
@@ -71,7 +77,7 @@ pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the 
 
 pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
 
-pnpm check                                   # 235 tests: protocol 49, test-kit 17, sdk 120, console 49
+pnpm check                                   # 253 tests: protocol 49, test-kit 17, sdk 141, console 34, web 12
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -104,6 +110,13 @@ q say "deploy api 1.4.2 to production with 3 replicas" --to bot
 q inbox
 q approve fd908596 --set replicas=5          # sign consent to the edit, not to the proposal
 q audit
+```
+
+Or in a browser, which is the same decision with the payload as form fields:
+
+```sh
+q keygen web && q workspace add web          # the relay has to admit the key first
+pnpm --filter @quorum/web dev                # http://localhost:5173
 ```
 
 Of the tests, the Python check is the one worth running. It validates the signed transcript

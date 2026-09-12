@@ -12,13 +12,13 @@ import { after, describe, it } from 'node:test'
 import { computeId, type UnsignedEvent } from '@quorum/protocol'
 import {
   Counters,
-  FileStore,
   MemoryStore,
   createOnce,
   hasRun,
   incompleteEffects,
   namespaced,
 } from '../src/index.ts'
+import { FileStore } from '../src/store-file.ts'
 import { tempDir } from './harness.ts'
 
 const EVENT = 'a'.repeat(64)

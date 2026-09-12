@@ -1,13 +1,17 @@
 {
   "name": "@quorum/sdk",
   "version": "0.1.0",
-  "description": "Quorum: the agent SDK — signers, a relay connection, exactly-once effects, replay and leases",
+  "description": "Quorum: the agent SDK \u2014 signers, a relay connection, exactly-once effects, replay and leases",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
     }
   },
   "files": [

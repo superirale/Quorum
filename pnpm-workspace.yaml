@@ -2,3 +2,7 @@ packages:
   - packages/*
   - apps/*
   - examples/*
+
+# Vite's bundler ships a native binary and needs its install script to run.
+onlyBuiltDependencies:
+  - esbuild

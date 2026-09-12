@@ -10,10 +10,10 @@
  */
 
 import { ActionBody, digest, type NostrEvent } from '@quorum/protocol'
-import { approvalResponse } from '@quorum/sdk'
-import { applyEdits, bool, flag, flagAll, pairs, type ParsedArgs } from '../args.ts'
+import { applyEdits, approvalResponse, inbox, type Pending } from '@quorum/sdk'
+import { bool, flag, flagAll, pairs, type ParsedArgs } from '../args.ts'
 import { bold, cyan, dim, green, red, short, when, yellow } from '../format.ts'
-import { findByPrefix, inbox, type Pending } from '../inbox.ts'
+import { findByPrefix } from '../inbox.ts'
 import { actionOf, groupEvents, open, proposalOf, type Session } from '../session.ts'
 
 export async function inboxCommand(args: ParsedArgs): Promise<void> {

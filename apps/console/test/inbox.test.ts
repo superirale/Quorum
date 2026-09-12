@@ -1,23 +1,21 @@
 /**
- * What the console decides is waiting on you.
+ * Typing part of an id and getting the request you meant.
  *
- * These are permission rules wearing a list's clothing. Getting any of them
- * wrong produces the same outcome from opposite directions: a queue that shows
- * requests nobody asked you to answer is a queue you learn to clear without
- * reading, which is precisely the habit this project exists to avoid.
+ * The queue rules themselves are the SDK's, and tested there. What is tested
+ * here is the one thing only a terminal needs: turning `a91f` into exactly one
+ * pending request, or refusing.
  */
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { Kinds, build, digest, type NostrEvent } from '@quorum/protocol'
-import { LocalSigner } from '@quorum/sdk'
-import { addressees, findByPrefix, inbox } from '../src/inbox.ts'
+import { LocalSigner, inbox } from '@quorum/sdk'
+import { findByPrefix } from '../src/inbox.ts'
 
 const GROUP = 'payments'
 const NOW = 1_800_000_000
 
 const ada = LocalSigner.generate()
-const bob = LocalSigner.generate()
 const bot = LocalSigner.generate()
 
 const input = { service: 'api', version: '1.4.2', env: 'production', replicas: 3 }
@@ -81,93 +79,6 @@ async function response(to: NostrEvent, signer: LocalSigner): Promise<NostrEvent
     }),
   )
 }
-
-describe('inbox', () => {
-  it('lists a request addressed to me', async () => {
-    const asked = await request({ to: [ada.publicKey] })
-    const items = inbox([asked], { me: ada.publicKey, now: NOW })
-    assert.equal(items.length, 1)
-    assert.equal(items[0]!.body.title, 'Deploy api 1.4.2')
-  })
-
-  it('ignores a request addressed to somebody else', async () => {
-    const asked = await request({ to: [bob.publicKey] })
-    assert.deepEqual(inbox([asked], { me: ada.publicKey, now: NOW }), [])
-  })
-
-  it('ignores a request that merely mentions me', async () => {
-    // A `p` tag without the `to` marker is a mention, and a mention is not a
-    // question. This is the one addressing rule the whole system rests on, so
-    // the console must not quietly widen it.
-    const mentioned = await bot.sign(
-      build({
-        kind: Kinds.ApprovalRequest,
-        pubkey: bot.publicKey,
-        group: GROUP,
-        mention: [ada.publicKey],
-        created_at: NOW - 60,
-        body: { title: 'FYI', summary: 'nothing for you to do', risk: 'low', required: 1 },
-      }),
-    )
-    assert.deepEqual(inbox([mentioned], { me: ada.publicKey, now: NOW }), [])
-  })
-
-  it('drops one I have already answered, and keeps it under --all', async () => {
-    const asked = await request({ to: [ada.publicKey] })
-    const events = [asked, await response(asked, ada)]
-
-    assert.deepEqual(inbox(events, { me: ada.publicKey, now: NOW }), [])
-
-    const all = inbox(events, { me: ada.publicKey, now: NOW, all: true })
-    assert.equal(all.length, 1)
-    assert.equal(all[0]!.answered, true)
-  })
-
-  it('does not count somebody else\'s answer as mine', async () => {
-    // Bob answering is not Ada answering, even on a request that named them
-    // both. n-of-m is counted by distinct signer, so this must stay open.
-    const asked = await request({ to: [ada.publicKey, bob.publicKey], required: 2 })
-    const items = inbox([asked, await response(asked, bob)], { me: ada.publicKey, now: NOW })
-    assert.equal(items.length, 1)
-    assert.equal(items[0]!.answered, false)
-  })
-
-  it('hides an expired request unless asked for it', async () => {
-    const asked = await request({ to: [ada.publicKey], expiresAt: NOW - 1 })
-    assert.deepEqual(inbox([asked], { me: ada.publicKey, now: NOW }), [])
-    assert.equal(inbox([asked], { me: ada.publicKey, now: NOW, all: true })[0]!.expired, true)
-  })
-
-  it('skips an event whose body is not an approval request', async () => {
-    const junk = await bot.sign({
-      kind: Kinds.ApprovalRequest,
-      pubkey: bot.publicKey,
-      created_at: NOW - 60,
-      tags: [
-        ['h', GROUP],
-        ['p', ada.publicKey, '', 'to'],
-        ['alt', 'malformed'],
-      ],
-      content: 'not json at all',
-    })
-    assert.deepEqual(inbox([junk], { me: ada.publicKey, now: NOW }), [])
-  })
-
-  it('puts the longest-waiting request first', async () => {
-    const older = await request({ to: [ada.publicKey], createdAt: NOW - 500 })
-    const newer = await request({ to: [ada.publicKey], createdAt: NOW - 10 })
-    const items = inbox([newer, older], { me: ada.publicKey, now: NOW })
-    assert.deepEqual(
-      items.map((i) => i.request.id),
-      [older.id, newer.id],
-    )
-  })
-
-  it('reports the approvers a request names', async () => {
-    const asked = await request({ to: [ada.publicKey, bob.publicKey], required: 2 })
-    assert.deepEqual(addressees(asked), [ada.publicKey, bob.publicKey])
-  })
-})
 
 describe('findByPrefix', () => {
   it('finds one by the start of its id', async () => {

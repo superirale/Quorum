@@ -1,0 +1,33 @@
+{
+  "name": "@quorum/web",
+  "version": "0.1.0",
+  "description": "Quorum: the reference client — the approvals queue a human actually sits in front of",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "predev": "pnpm --filter @quorum/sdk build",
+    "dev": "vite",
+    "prebuild": "pnpm --filter @quorum/sdk build",
+    "build": "vite build",
+    "preview": "vite preview",
+    "pretest": "pnpm --filter @quorum/sdk build",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "pretypecheck": "pnpm --filter @quorum/sdk build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@quorum/protocol": "workspace:*",
+    "@quorum/sdk": "workspace:*",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.1.0"
+  }
+}

@@ -28,7 +28,6 @@ import { join } from 'node:path'
 import { Kinds, digest, refTo, type NostrEvent } from '@quorum/protocol'
 import {
   Counters,
-  FileStore,
   LocalSigner,
   MemoryStore,
   Publisher,
@@ -37,6 +36,7 @@ import {
   type Agent,
   type Store,
 } from '@quorum/sdk'
+import { FileStore } from '@quorum/sdk/node'
 import { FakeRelay, settle } from '@quorum/test-kit'
 
 const GROUP = 'payments'

@@ -40,7 +40,8 @@
  * do nothing.
  */
 
-import { FileStore, Grants, LocalSigner } from '@quorum/sdk'
+import { Grants, LocalSigner } from '@quorum/sdk'
+import { FileStore } from '@quorum/sdk/node'
 import { createDeployAgent } from './agent.ts'
 import { Deploys, RESOURCE } from './deploy.ts'
 

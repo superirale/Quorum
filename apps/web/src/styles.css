@@ -1,0 +1,169 @@
+/*
+ * Enough CSS to read a payload and press a button, and no framework.
+ *
+ * Risk is the one thing given real colour. A high-risk card that looks like
+ * every other card is the same failure as a queue that cries wolf: the point of
+ * the screen is that the consequential thing is visibly consequential.
+ */
+
+:root {
+  --bg: #14161a;
+  --panel: #1c1f26;
+  --line: #2b303a;
+  --text: #e6e8ec;
+  --dim: #8a919e;
+  --accent: #6ea8fe;
+  --good: #57c08d;
+  --bad: #e5716b;
+  --warn: #e0b35c;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+
+code, .kind, .digest code, input, textarea, select {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+h1 { font-size: 20px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 20px 0 8px; }
+
+.dim { color: var(--dim); }
+.bad { color: var(--bad); }
+.warn { color: var(--warn); }
+.empty { padding: 12px 0; }
+
+/* --- shell --- */
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 16px 16px; overflow: hidden; flex: 1; }
+main section { overflow-y: auto; min-width: 0; }
+main .right { display: flex; flex-direction: column; }
+
+.status { font-size: 12px; padding: 1px 6px; border-radius: 10px; background: var(--line); }
+.status.live { color: var(--good); }
+.status.error { color: var(--bad); }
+.count { background: var(--accent); color: #10131a; border-radius: 10px; padding: 0 7px; font-size: 12px; }
+
+/* --- forms --- */
+
+input, textarea, select {
+  background: #11131880;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  width: 100%;
+}
+input:focus, textarea:focus { outline: 1px solid var(--accent); }
+
+button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); color: #10131a; border-color: transparent; font-weight: 600; }
+button.danger { color: var(--bad); }
+button.link { background: none; border: none; padding: 0; color: var(--accent); }
+button.link.danger { color: var(--bad); }
+
+.row { display: flex; gap: 8px; align-items: center; }
+label { display: block; margin-bottom: 14px; }
+label > span:first-child { display: block; color: var(--dim); margin-bottom: 4px; font-size: 12px; }
+.hint { display: block; color: var(--dim); font-size: 12px; margin-top: 4px; }
+
+/* --- setup --- */
+
+.setup { max-width: 620px; margin: 48px auto; padding: 0 16px; }
+
+.banner { border-radius: 8px; padding: 10px 12px; margin: 12px 0; border: 1px solid; font-size: 13px; }
+.banner p { margin: 6px 0 0; }
+.banner.warn { border-color: var(--warn); background: #e0b35c14; }
+.banner.error { border-color: var(--bad); background: #e5716b14; color: var(--bad); }
+
+/* --- approval cards --- */
+
+.queue { display: flex; flex-direction: column; gap: 12px; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.card.risk-high { border-left-color: var(--bad); }
+.card.risk-medium { border-left-color: var(--warn); }
+.card.risk-low { border-left-color: var(--good); }
+.card header { border: none; padding: 0 0 4px; }
+.card p { margin: 4px 0; }
+
+.pill { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--line); margin-left: 6px; }
+.pill.risk-high { background: var(--bad); color: #10131a; }
+.pill.risk-medium { background: var(--warn); color: #10131a; }
+.pill.edited { background: var(--accent); color: #10131a; }
+.pill.status-succeeded { color: var(--good); }
+.pill.status-failed, .pill.status-denied { color: var(--bad); }
+
+.fields { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.field { margin: 0; }
+.field.edited input, .field.edited textarea, .field.edited select { border-color: var(--accent); }
+.field .was { color: var(--accent); font-size: 12px; }
+.field .bad { display: block; font-size: 12px; }
+
+.digest { color: var(--dim); font-size: 12px; }
+.reason { margin: 8px 0; }
+
+/* --- chains --- */
+
+.chains { display: flex; flex-direction: column; gap: 10px; }
+.chain { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.chain.broken { border-color: var(--bad); }
+.chain header { border: none; padding: 0 0 4px; }
+.vote { font-size: 13px; }
+.vote.uncounted { color: var(--dim); text-decoration: line-through; }
+.verdict { margin: 8px 0 0; font-weight: 600; }
+
+/* --- feed --- */
+
+.feed { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; }
+.feed li {
+  display: grid;
+  grid-template-columns: 44px 78px 1fr auto;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid #ffffff08;
+}
+.feed .kind { color: var(--dim); text-align: right; font-size: 12px; }
+.feed .who { font-size: 12px; overflow: hidden; }
+.feed .text { overflow-wrap: anywhere; }
+.feed .at { font-size: 12px; }
+.feed li.mine .text { color: #fff; }
+
+.composer { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.composer .to { max-width: 200px; }
+.composer p { margin: 6px 0 0; font-size: 12px; }

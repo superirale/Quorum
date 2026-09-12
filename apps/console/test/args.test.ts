@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { applyEdits, bool, flag, flagAll, int, pairs, parseArgs, parseValue } from '../src/args.ts'
+import { bool, flag, flagAll, int, pairs, parseArgs, parseValue } from '../src/args.ts'
 
 describe('parseArgs', () => {
   it('separates command words from flags', () => {
@@ -67,41 +67,5 @@ describe('pairs', () => {
 
   it('parses a quoted number back to a string', () => {
     assert.deepEqual(parseValue('"3"'), '3')
-  })
-})
-
-describe('applyEdits', () => {
-  const proposed = { service: 'api', version: '1.4.2', env: 'production', replicas: 30 }
-
-  it('returns the input untouched when there is nothing to edit', () => {
-    assert.equal(applyEdits(proposed, {}), proposed)
-  })
-
-  it('copies rather than mutating', () => {
-    const edited = applyEdits(proposed, { replicas: 3 })
-    assert.deepEqual(edited, { ...proposed, replicas: 3 })
-    // The chain records both digests and an auditor compares them, so the
-    // original has to survive intact.
-    assert.equal(proposed.replicas, 30)
-  })
-
-  it('reaches nested keys', () => {
-    const nested = { limits: { cpu: 1, memory: 512 } }
-    assert.deepEqual(applyEdits(nested, { 'limits.cpu': 4 }), { limits: { cpu: 4, memory: 512 } })
-  })
-
-  it('refuses to invent a field the agent never proposed', () => {
-    // An approver adding an argument the agent did not ask about is either a
-    // typo or a way past the agent's own validation. Neither should go through
-    // quietly.
-    assert.throws(() => applyEdits(proposed, { force: true }), /has no "force"/)
-  })
-
-  it('refuses to edit a payload that is not an object', () => {
-    assert.throws(() => applyEdits('a string', { x: 1 }), /object payload/)
-  })
-
-  it('refuses a path through a non-object', () => {
-    assert.throws(() => applyEdits(proposed, { 'service.name': 'x' }), /not an object/)
   })
 })

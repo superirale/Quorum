@@ -14,7 +14,8 @@ import {
   type NostrEvent,
   type UnsignedEvent,
 } from '@quorum/protocol'
-import { Counters, FileStore, LocalSigner, Publisher, RelayClient } from '@quorum/sdk'
+import { Counters, LocalSigner, Publisher, RelayClient } from '@quorum/sdk'
+import { FileStore } from '@quorum/sdk/node'
 import { home, loadConfig, loadKey, type Config } from './config.ts'
 
 /** NIP-29 management kinds. Not Quorum kinds, so they are signed raw. */
