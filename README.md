@@ -28,6 +28,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`packages/test-kit`](packages/test-kit) | In-process relay + chaos helpers, so agents are testable with no infra |
 | [`apps/relay`](apps/relay) | Reference relay — khatru + relay29 + the Quorum policies (Go) |
 | [`examples/echo-agent`](examples/echo-agent) | The smallest complete agent, and a narrated demo of why each part is there |
+| [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -44,7 +45,13 @@ the relay actually said, `to`-marked `p` tag addressing, an exactly-once effect 
 across a restart, per-author counters with gap detection, and thread leases so replicas of one
 key produce one answer. Verified against the real Go relay, not only the test double.
 
-Next: M4, approvals and capability grants — the milestone the thesis rests on.
+**M4 complete** — approvals and capability grants, the milestone the thesis rests on. An agent
+proposes a deploy, a human signs consent bound to the exact arguments, and the resource checks
+that signature itself before doing anything. Grants are signed addressable events verified at
+the resource; a delegation intersects with them and can only ever narrow. The whole chain
+verifies offline, from the events alone, with no relay and no server.
+
+Next: M5, the reference client.
 
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
@@ -52,24 +59,34 @@ Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR
 
 ```sh
 pnpm install
-pnpm --filter @quorum/echo-agent demo        # start here — the agent, narrated, no setup
+pnpm --filter @quorum/deploy-agent demo      # start here — consent, narrated, no setup
+pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the signatures
 
-pnpm check                                   # 132 tests: protocol 48, test-kit 17, sdk 67
+pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
+
+pnpm check                                   # 180 tests: protocol 48, test-kit 17, sdk 115
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
 ```
 
-The demo is the fastest way in. It runs the three claims M3 rests on — an agent answers only
-what is addressed to it, survives being killed mid-handler without repeating itself, and does
-not double-respond when two replicas share a key — and runs each one again with the mechanism
-removed, so the failure it prevents is on screen next to it.
+The deploy demo is the fastest way in, and the pair of commands is the point. The first runs
+five acts — the loop, a stranger who was never asked, a human who edits the arguments before
+approving, a revoked grant, and a delegation that can only narrow — and drops a transcript on
+disk. The second reads that file back with no relay, no keys and no network, and tells you who
+approved what. Change one digit of the deploy it approved and it says so.
+
+The echo demo is the layer below: an agent answers only what is addressed to it, survives being
+killed mid-handler without repeating itself, and does not double-respond when two replicas share
+a key — each claim run again with the mechanism removed, so the failure it prevents is on screen
+next to it.
 
 To see the same thing over a real socket against the Go relay:
 
 ```sh
 cd apps/relay && make run                    # :3334, in another terminal
 pnpm --filter @quorum/echo-agent live
+pnpm --filter @quorum/deploy-agent live      # also checks the relay refuses three forgeries
 ```
 
 Of the tests, the Python check is the one worth running. It validates the signed transcript

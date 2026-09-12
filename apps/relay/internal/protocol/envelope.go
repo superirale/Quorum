@@ -159,6 +159,14 @@ func (i *Index) Addressees(event *nostr.Event) []string {
 // Group returns the NIP-29 group id an event belongs to.
 func Group(event *nostr.Event) string { return firstTagValue(event, TagGroup) }
 
+// Parent returns the NIP-22 `e` tag: the id of what this event directly answers.
+func Parent(event *nostr.Event) string { return firstTagValue(event, TagEvent) }
+
+// ActionID returns the action chain an event belongs to, which is the id of the
+// chain's `proposed` event. Empty for a proposal, which names the chain by
+// being it, and for everything outside an action.
+func ActionID(event *nostr.Event) string { return firstTagValue(event, TagAction) }
+
 // EncMode returns the channel encryption mode, defaulting to plaintext.
 func EncMode(event *nostr.Event) string {
 	if mode := firstTagValue(event, TagEnc); mode != "" {

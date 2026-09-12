@@ -8,20 +8,37 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Kinds, refTo, validateEvent, type EventRef, type NostrEvent } from '@quorum/protocol'
+import {
+  Kinds,
+  build,
+  refTo,
+  validateEvent,
+  type EventRef,
+  type NostrEvent,
+} from '@quorum/protocol'
 import { FakeRelay } from '@quorum/test-kit'
-import { Counters, LocalSigner, MemoryStore, Publisher, RelayClient } from '../src/index.ts'
+import {
+  Counters,
+  Grants,
+  LocalSigner,
+  MemoryStore,
+  Publisher,
+  RelayClient,
+  type PublishOptions,
+} from '../src/index.ts'
 
 /** A human, or another agent: something that publishes into the channel. */
 export class Actor {
   readonly pubkey: string
   readonly client: RelayClient
+  readonly group: string
   private readonly publisher: Publisher
 
-  private constructor(pubkey: string, client: RelayClient, publisher: Publisher) {
+  private constructor(pubkey: string, client: RelayClient, publisher: Publisher, group: string) {
     this.pubkey = pubkey
     this.client = client
     this.publisher = publisher
+    this.group = group
   }
 
   static async create(url: string, group: string): Promise<Actor> {
@@ -30,7 +47,7 @@ export class Actor {
     await client.connect()
     const counters = await Counters.load(new MemoryStore(), signer.publicKey)
     const publisher = new Publisher({ client, signer, pubkey: signer.publicKey, group, counters })
-    return new Actor(signer.publicKey, client, publisher)
+    return new Actor(signer.publicKey, client, publisher, group)
   }
 
   /** Channel-level chat, NIP-C7. */
@@ -54,8 +71,49 @@ export class Actor {
     })
   }
 
+  /** Anything else: an approval response, a grant, a delegation. */
+  publish(options: PublishOptions): Promise<NostrEvent> {
+    return this.publisher.publish(options)
+  }
+
+  /** Issue and withdraw capabilities as this actor. */
+  grants(): Grants {
+    return new Grants({ client: this.client, group: this.group, publisher: this.publisher })
+  }
+
   close(): void {
     this.client.close()
+  }
+}
+
+/**
+ * A key with no relay behind it.
+ *
+ * Grants and audit chains are verified offline — that is the claim — so the
+ * tests for them should not be able to accidentally lean on a relay being
+ * present, on delivery, or on anything but the bytes and the signature.
+ */
+export class Keyholder {
+  readonly signer: LocalSigner
+  readonly pubkey: string
+  private readonly group: string
+  private counter = 0
+
+  constructor(group = 'payments', signer = LocalSigner.generate()) {
+    this.signer = signer
+    this.pubkey = signer.publicKey
+    this.group = group
+  }
+
+  sign(options: PublishOptions): Promise<NostrEvent> {
+    return this.signer.sign(
+      build({
+        ...options,
+        pubkey: this.pubkey,
+        group: options.group ?? this.group,
+        counter: options.counter ?? ++this.counter,
+      }),
+    )
   }
 }
 

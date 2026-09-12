@@ -14,7 +14,7 @@
         "resource": {
           "type": "string",
           "minLength": 1,
-          "description": "e.g. \"action:deploy.production\""
+          "description": "e.g. \"action:deploy\"; narrow with scope, not with the name"
         },
         "actions": {
           "minItems": 1,

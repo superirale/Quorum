@@ -75,6 +75,26 @@ actor's role · deleted events stay deleted · `previous` tag checking.
    `plaintext`, because on `nip44` and `mls` channels the content is ciphertext
    and a relay that insisted on parsing it would reject every event the moment a
    workspace turned encryption on.
+7. `RejectForeignActionTransitions` — only the pubkey that published an action's
+   `proposed` may advance it.
+8. `RejectUnaskedApprovals` — an 8103 must answer an 8102, in the same group,
+   from a pubkey that 8102 addressed, echoing its `input_digest`.
+
+The last two are last because they are the only policies that read the database.
+An event that is malformed, out of range or from a stranger has already been
+refused without touching a disk.
+
+They also **fail open when the relay does not hold the referenced event**, and
+that is deliberate rather than an oversight. Events legitimately travel between
+relays; a relay that rejected every approval whose request it has not got would
+break federation to catch nothing, since whoever forged it can simply publish
+the request too. The SDK's auditor makes no such allowance — it is handed the
+whole chain and is the party being asked to act on the answer.
+
+That division is the point. **The relay is defence in depth and is never the
+authority.** It refuses what it can prove wrong from events it holds; a resource
+deciding whether to actually deploy something re-derives everything itself, from
+signatures, with no relay involved. `examples/deploy-agent` is that resource.
 
 There is deliberately **no `h`-tag check of our own**: relay29's
 `RequireHTagForExistingGroup` is strictly stronger.
@@ -127,12 +147,14 @@ matched nothing. Read `Subscription.ClosedReason`.
 
 - **Anyone may join an open group.** relay29 admits any join request unless the
   group is marked closed, which is wrong for a workspace holding approval
-  records and capability grants. Until M4 wires grants into membership, mark
-  groups closed and add members explicitly.
+  records and capability grants. Still open after M4 — the approval and
+  transition policies landed, membership did not. Mark groups closed and add
+  members explicitly in the meantime.
 - **Reads are open by default.** `QUORUM_REQUIRE_AUTH=true` demands NIP-42.
   Private groups already require auth regardless.
 - **The relay does not yet check who may change a thread's state.** Any member
-  can publish a `thread_op`. Capability grants land in M4.
+  can publish a `thread_op`. The grant machinery exists as of M4; the relay does
+  not yet consult it here.
 - **Checkpoints (kind 8108) are reserved but not produced.** That is M7. The
   forgery policy already covers the kind so nobody can squat it in the meantime.
 

@@ -260,6 +260,51 @@ replaying its work MUST memoise the **signed event**, not the body. Rebuilding
 the same body a second later yields a different id, and therefore a different
 action.
 
+### A chain is ordered by its parent links, not by `created_at`
+
+Every transition after `proposed` MUST carry an `e` tag naming the event it
+follows. A verifier evaluating the status lifecycle MUST order the chain by
+those links — depth from the proposal — and MUST NOT order it by `created_at`.
+Time MAY break ties between events that are genuinely unordered.
+
+Two independent reasons, either sufficient:
+
+- **It does not work.** A loop that needs no human, and often one that does on
+  either side of the wait, publishes `proposed`, `awaiting_approval`, `running`
+  and `succeeded` inside the same second. `created_at` has one-second
+  resolution, so NIP-01's `(created_at, id)` order falls through to an id
+  tiebreak — a hash — and the lifecycle check rejects honest chains about half
+  the time.
+- **It would not be safe if it did.** `created_at` is a client-supplied wall
+  clock: the author picks it, so an attacker picks theirs. The ordering that
+  decides whether an execution was legal MUST NOT be a field the executing party
+  chooses. An event id is a hash of content that already includes the parent id,
+  so causal order is the one ordering here nobody can rewrite after the fact.
+
+### Only the proposer advances the chain
+
+An 8101 or 8102 in a chain, signed by anyone other than the author of the
+`proposed` event, MUST NOT affect the chain's status, its digests, or its
+validity. A verifier SHOULD report it. A verifier MUST NOT treat it as making
+the chain invalid.
+
+Both halves are load-bearing, and the second is the one implementations get
+wrong. Counting a stranger's transition would let any workspace member publish a
+`succeeded` for someone else's deploy and have the log read as though the work
+happened. But *erroring* on it hands every member a veto: one junk event, which
+the proposer cannot retract, permanently invalidates an honest chain — and since
+every event defined here is valid on a generic relay, no relay policy can be
+relied on to stop them publishing it.
+
+The rule that resolves both: **a chain is invalid only when the party doing the
+work did something illegitimate.** A stranger's event says nothing about the
+proposer's conduct, and is treated the way an approval from someone nobody asked
+is already treated — recorded, disregarded, reported.
+
+For the same reason, the `proposed` event is identified by *being* the event
+whose id is the action id, never by "the event in this chain whose status says
+proposed". Anyone may publish one of the latter.
+
 ## Approvals
 
 1. The agent publishes 8102 `approval_request`, `p`-tagged with the `to` marker to
@@ -281,11 +326,35 @@ parent to the thread root — so "has a parent" is trivially true and says nothi
 A response whose parent is the thread rather than a request is an approval of
 nothing, and an agent that matches on action id alone would accept it.
 
+**The request MUST come from the proposer**, and a verifier MUST disregard any
+8102 in the chain signed by anyone else. This is stricter than the rule for
+transitions above — those are ignored, this one must be — because a request
+*names its own approvers*. Honour a stranger's and they ask themselves, answer
+themselves, and the chain tallies as approved by someone the agent never
+consulted.
+
+A relay MAY refuse to store an 8103 whose signer is not among the addressees of
+the 8102 it answers, and an 8101/8102 whose `action` tag names a chain proposed
+by someone else. A relay doing so MUST fail *open* when it does not hold the
+referenced event: events legitimately travel between relays, and refusing every
+approval whose request has not arrived breaks federation to catch nothing. A
+verifier holding the whole chain makes no such allowance — it is the party being
+asked to act on the answer.
+
 ## Capabilities and delegation
 
 A 38102 `capability_grant` is a signed attestation: *this pubkey may invoke this
 resource, in this scope, until T, N times, granted by me.* Resources are named
-after actions (`action:deploy.production`).
+after actions (`action:deploy`).
+
+Resource strings are matched **exactly**; there are no wildcards, and nothing
+narrows them. Anything a delegation might need to narrow therefore belongs in
+`scope`, not in the resource name: `action:deploy` with `{env: production}`, not
+`action:deploy.production`. A delegation reading "only in staging" can intersect
+a scope; against a name it can only whitelist a different string, which is a
+statement about identity rather than about authority and silently does nothing
+if the string is misspelt. A scope that does not match refuses; a whitelist entry
+matching no resource anyone requested is invisible.
 
 **Enforcement happens at the resource.** The tool verifies the signature chain
 before acting. A Quorum-aware relay MAY also enforce on plaintext channels as

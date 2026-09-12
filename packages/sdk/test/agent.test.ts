@@ -16,6 +16,7 @@ import { after, describe, it } from 'node:test'
 import { Kinds, digest, refTo, threadRef } from '@quorum/protocol'
 import { settle, waitFor, waitForCount } from '@quorum/test-kit'
 import {
+  Cursor,
   FileStore,
   LocalSigner,
   MemoryStore,
@@ -312,7 +313,14 @@ describe('restart', () => {
 
     const first = build()
     await first.start()
+    // A handler is finished when the *cursor* says so, not when its last line
+    // ran: killing the agent in between is the case the replay exists for, so
+    // stopping on `runs.length` would be testing the race, not the rule.
     await waitFor(() => runs.length === 1, { describe: 'the kickoff' })
+    await waitFor(
+      async () => (await Cursor.load(FileStore.in(dir.path), 'default')).inFlightIds.length === 0,
+      { describe: 'the handler to be recorded as finished' },
+    )
     await first.stop()
 
     const second = build()
@@ -321,6 +329,67 @@ describe('restart', () => {
     await settle(200)
 
     assert.deepEqual(runs, ['kickoff'], 'a completed handler was replayed after a restart')
+  })
+
+  it('resumes the interrupted handler before it takes on anything new', async () => {
+    // The queue is serial, so the order of the backfill decides what gets to
+    // block on a human first. Left to the relay that order is `created_at` — a
+    // wall clock the *other* clients set. An agent parked on an approval is the
+    // ordinary case from M4 onwards, so an event that sorts ahead of the replay
+    // does not merely go first, it goes first *forever*.
+    const h = await harness()
+    const dir = await tempDir()
+    after(async () => {
+      await h.finish()
+      await dir.remove()
+    })
+
+    const signer = LocalSigner.generate()
+    const ada = await Actor.create(h.relay.url, h.group)
+    h.cleanup(() => ada.close())
+
+    const order: string[] = []
+    const build = (block?: Promise<void>) => {
+      const agent = createAgent({
+        relay: h.relay.url,
+        signer,
+        group: h.group,
+        store: FileStore.in(dir.path),
+        leases: false,
+      })
+      agent.on(async (event) => {
+        order.push(event.content)
+        if (block) await block
+      })
+      return agent
+    }
+
+    const stuck = deferred()
+    const first = build(stuck.promise)
+    await first.start()
+    const root = await ada.thread('deploy', 'the interrupted one', [signer.publicKey])
+    await waitFor(() => order.length === 1, { describe: 'the first handler to start' })
+    await first.stop()
+
+    // Backdated, so the relay hands it over first in the replay window. Nothing
+    // exotic: two clients with clocks a minute apart produce exactly this.
+    await ada.publish({
+      kind: Kinds.ChatMessage,
+      text: 'something newer that looks older',
+      to: [signer.publicKey],
+      created_at: root.created_at - 60,
+    })
+
+    const second = build()
+    h.cleanup(() => second.stop())
+    await second.start()
+    await waitFor(() => order.length === 3, { describe: 'both events to be handled' })
+
+    assert.deepEqual(order, [
+      'the interrupted one',
+      'the interrupted one',
+      'something newer that looks older',
+    ])
   })
 })
 

@@ -36,6 +36,7 @@ import {
   type NostrEvent,
 } from '@quorum/protocol'
 import { WORK_KINDS, addressedFilter, channelFilter, controlFilter, isForMe } from './addressing.ts'
+import { runAction, type ActOptions, type ActResult } from './approval.ts'
 import { RelayClient, type Logger, type Subscription } from './client.ts'
 import { Counters } from './counter.ts'
 import { LeaseManager, type Lease, type LeaseOptions } from './lease.ts'
@@ -90,6 +91,11 @@ export interface AgentContext {
   publish(label: string, options: PublishOptions): Promise<NostrEvent>
   /** Reply in this thread — or in the channel, if this is not a thread. */
   say(text: string, options?: SayOptions): Promise<NostrEvent>
+  /**
+   * Do something consequential: propose it, get a human's signature, run it,
+   * and leave a chain anyone can verify offline. See `approval.ts`.
+   */
+  act<I, T>(options: ActOptions<I, T>): Promise<ActResult<T>>
   /** Claim this thread, so a sibling replica does not answer it too. */
   lease(purpose?: string): Promise<Lease>
   /** Authors we have provably missed something from. Ordering layer 1. */
@@ -124,6 +130,8 @@ export class Agent {
   private readonly control: Handler[] = []
   private readonly queue: NostrEvent[] = []
   private readonly queued = new Set<string>()
+  /** Ids whose handler was interrupted by a restart. They go to the front. */
+  private readonly replaying = new Set<string>()
   private readonly inFlightEffects = new Map<string, Promise<unknown>>()
   private readonly ownedClient: boolean
 
@@ -134,6 +142,7 @@ export class Agent {
   private leases: LeaseManager | undefined
   private subscription: Subscription | undefined
   private draining = false
+  private backfilling = false
   private running = false
 
   constructor(options: AgentOptions) {
@@ -266,6 +275,7 @@ export class Agent {
       this.log.warn(`[agent] effect '${key}' was started but never completed; it will be retried`)
     }
     const replaying = this.cursor.inFlightIds
+    for (const id of replaying) this.replaying.add(id)
     if (replaying.length) {
       this.log.warn(
         `[agent] ${replaying.length} handler(s) did not finish before shutdown; replaying from ${new Date(
@@ -290,22 +300,29 @@ export class Agent {
   private subscribe(): Promise<void> {
     return new Promise<void>((resolve) => {
       let first = true
+      // Nothing is handled until the backfill is complete. The events in it
+      // arrive in whatever order the relay chose — `created_at`, which is other
+      // people's clocks — and the queue is serial, so handling them as they
+      // land lets that order decide which work gets to block on a human first.
+      // Held, the backfill is a set rather than a sequence, and `enqueue` can
+      // put unfinished work at the front of it. See `drain`.
+      this.backfilling = true
+      const opened = () => {
+        if (!first) return
+        first = false
+        this.backfilling = false
+        void this.drain()
+        resolve()
+      }
       this.subscription = this.client.subscribe(() => this.filters(), {
         onEvent: (event) => this.ingest(event),
-        onEose: () => {
-          if (!first) return
-          first = false
-          resolve()
-        },
+        onEose: opened,
         onClosed: (reason) => {
           // A closed subscription is the failure mode this SDK was written to
           // make visible. An agent that treats it as silence looks healthy and
           // does nothing, forever.
           this.log.error(`[agent] the relay closed our subscription: ${reason}`)
-          if (first) {
-            first = false
-            resolve()
-          }
+          opened()
         },
       })
     })
@@ -330,8 +347,29 @@ export class Agent {
     if (this.queued.has(event.id)) return
 
     this.queued.add(event.id)
-    this.queue.push(event)
+    this.enqueue(event)
     void this.drain()
+  }
+
+  /**
+   * Unfinished work first, then arrival order.
+   *
+   * A restart replays the triggers of handlers that never finished, but they
+   * come back through the same subscription as everything published while the
+   * process was down — and a relay sorts by `created_at`, which is a wall clock
+   * with one-second resolution and ties broken arbitrarily. Since the queue is
+   * serial, an event that happens to sort first can park on a human and starve
+   * the very handler the restart was supposed to resume. Work already begun is
+   * therefore not subject to the ordering the relay chose for it.
+   */
+  private enqueue(event: NostrEvent): void {
+    if (!this.replaying.has(event.id)) {
+      this.queue.push(event)
+      return
+    }
+    const at = this.queue.findIndex((queued) => !this.replaying.has(queued.id))
+    if (at === -1) this.queue.push(event)
+    else this.queue.splice(at, 0, event)
   }
 
   /**
@@ -343,12 +381,13 @@ export class Agent {
    * come through here.
    */
   private async drain(): Promise<void> {
-    if (this.draining) return
+    if (this.draining || this.backfilling) return
     this.draining = true
     try {
       while (this.queue.length) {
         const event = this.queue.shift()!
         this.queued.delete(event.id)
+        this.replaying.delete(event.id)
 
         this.cursor.begin(event)
         await this.cursor.save()
@@ -430,6 +469,28 @@ export class Agent {
         return thread
           ? publish(label, { kind: Kinds.Comment, text, thread, parent: refTo(event), to })
           : publish(label, { kind: Kinds.ChatMessage, text, to })
+      },
+
+      act(options) {
+        if (!thread) {
+          throw new Error(
+            'an action lives in a thread, and this event is not in one. Start a thread ' +
+              '(kind 11) first: an approval with nowhere to be answered is not an approval.',
+          )
+        }
+        return runAction(
+          {
+            once,
+            publish,
+            client: agent.client,
+            group: agent.options.group,
+            me: agent.pubkey,
+            thread,
+            parent: refTo(event),
+            log: agent.log,
+          },
+          options,
+        )
       },
 
       async lease(purpose) {

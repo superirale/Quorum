@@ -227,6 +227,13 @@ export class RelayClient {
       pending.fail(new Error('client closed'))
     }
     this.pendingOk.clear()
+    // Tell anything still listening, rather than leaving it waiting on a socket
+    // that is never coming back. A reconnect deliberately does *not* do this —
+    // the REQ is re-sent on the new socket — so `onClosed` keeps one meaning:
+    // this subscription is over. From M4 the thing waiting is usually a handler
+    // paused on a human's approval, and it has to be allowed to unwind so the
+    // next process can replay it.
+    for (const sub of this.subs.values()) sub.handlers.onClosed?.('client closed')
     this.subs.clear()
     this.socket?.close()
     this.socket = undefined

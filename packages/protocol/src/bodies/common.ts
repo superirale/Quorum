@@ -73,9 +73,17 @@ export const Provenance = z.object({
 })
 export type Provenance = z.infer<typeof Provenance>
 
-/** A capability being asked for or handed out. */
+/**
+ * A capability being asked for or handed out.
+ *
+ * `resource` is matched exactly — no wildcards, and nothing ever narrows it — so
+ * anything a delegation might need to narrow belongs in `scope` instead:
+ * `action:deploy` with `{env: "production"}`, not `action:deploy.production`.
+ * A delegation can intersect a scope; against a name it can only whitelist a
+ * different string, which silently does nothing if that string is misspelt.
+ */
 export const GrantSpec = z.object({
-  resource: z.string().min(1).describe('e.g. "action:deploy.production"'),
+  resource: z.string().min(1).describe('e.g. "action:deploy"; narrow with scope, not with the name'),
   actions: z.array(z.string().min(1)).min(1).describe('e.g. ["invoke"]'),
   scope: z
     .record(z.string(), z.unknown())

@@ -193,6 +193,11 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		policy.RejectImplausibleTimestamps(cfg.ClockSkew),
 		policy.RejectRelaySignedForgeries(pubkey, relaySignedKinds),
 		policy.ValidateQuorumEvent(index),
+		// Last, because these are the only policies that read the database. An
+		// event that is malformed, out of range or from a stranger has already
+		// been refused without touching a disk.
+		policy.RejectForeignActionTransitions(db),
+		policy.RejectUnaskedApprovals(index, db),
 	)
 
 	if cfg.EventsPerMinute > 0 {

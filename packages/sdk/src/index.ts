@@ -29,8 +29,12 @@
 
 export * from './addressing.ts'
 export * from './agent.ts'
+export * from './approval.ts'
+export * from './audit.ts'
 export * from './client.ts'
 export * from './counter.ts'
+export * from './delegation.ts'
+export * from './grants.ts'
 export * from './lease.ts'
 export * from './once.ts'
 export * from './publish.ts'

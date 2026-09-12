@@ -32,14 +32,27 @@ import {
   type NostrEvent,
 } from '@quorum/protocol'
 
-/** What an agent watching a channel for work normally wants. */
+/**
+ * What an agent watching a channel for work normally wants.
+ *
+ * `approval_request` is here because an agent can be an *approver*: a request
+ * `to`-addresses the people it asks, and some of them are agents.
+ *
+ * `approval_response` is deliberately **not** here, and the omission is
+ * load-bearing. A response is `to`-addressed back to the agent that asked, so
+ * leaving it in means every response wakes the handler as if it were a fresh
+ * instruction — while the handler that is actually waiting for it sits inside
+ * `act()`, which consumes responses through its own subscription. On a restart
+ * the two collide: the response and the replayed trigger arrive together, and
+ * whichever the relay happens to send first wins. An agent that wants to watch
+ * other people's approvals can ask for the kind explicitly.
+ */
 export const WORK_KINDS: readonly number[] = Object.freeze([
   BorrowedKinds.ChatMessage,
   BorrowedKinds.Thread,
   BorrowedKinds.Comment,
   RegularKinds.Action,
   RegularKinds.ApprovalRequest,
-  RegularKinds.ApprovalResponse,
   RegularKinds.Handoff,
   RegularKinds.Artifact,
   RegularKinds.Error,

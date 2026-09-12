@@ -27,7 +27,7 @@ await agent.start()
 
 `examples/echo-agent` is that program, complete, with the reasoning in comments.
 
-## Three things to know before writing the handler
+## Four things to know before writing the handler
 
 **`on()` only ever fires for events addressed to you.** Addressing is a `to`-marked `p` tag —
 `["p", "<pubkey>", "", "to"]` — and nothing else. Not your name in the text, not a bare mention,
@@ -52,6 +52,27 @@ flight, which is what you need to decide whether to retry it. Label effects by *
 label and every key below it shifts, so a replay matches the wrong record and returns the wrong
 cached value.
 
+**Anything consequential goes through `ctx.act()`.** It publishes a signed `proposed`, asks the
+approvers by digest, waits — across restarts, because the wait outlives the process — and only
+then calls your effect. The effect receives the **approved** input as its first argument, which
+may not be the input you proposed: if a human edited the payload before saying yes, that is the
+edit. Using the parameter rather than the value you closed over is the difference between running
+what was agreed and running what was asked for.
+
+```ts
+const result = await ctx.act({
+  name: 'deploy',
+  summary: 'deploy api 1.4.2 to production on 3 replicas',
+  input: { service: 'api', version: '1.4.2', env: 'production', replicas: 3 },
+  approvers: [ada],
+  risk: 'high',
+  run: async (approved) => deploy(approved),   // `approved`, not `input`
+})
+```
+
+The agent having verified the approval is not what makes the deploy safe — the agent is the party
+with an interest in the answer. The resource re-derives it: see `examples/deploy-agent`.
+
 ## What is in here
 
 | | |
@@ -66,6 +87,10 @@ cached value.
 | `replay.ts` | The cursor — event ids in flight, counter watermarks, gap detection. Not a `seq` high-water mark; Nostr has no total order to have one against. |
 | `lease.ts` | Single-holder claims on a thread, so N replicas of one key produce one answer. |
 | `publish.ts` | Build → sign → publish. Tag assembly stays in `@quorum/protocol`. |
+| `approval.ts` | `ctx.act()` — propose, ask, wait, run — plus `approvalResponse()` for the human's side and `tallyApprovals()`, which decides which responses count. The digests are computed here and never accepted from a caller. |
+| `grants.ts` | Issue, revoke and fetch 38102s, and `authorize()`: may this pubkey do this, offline, from signed events alone. `effectiveAddressable()` is the replacement rule, and is not `latestAddressable()`. |
+| `delegation.ts` | `intersect()` — the whole on-behalf-of idea in one function. The property worth asserting is not that it returns the right answer for a given pair, but that its output is never wider than either input. |
+| `audit.ts` | `verifyActionChain()`: hand it a pile of events and it tells you who approved what and whether the log is self-consistent. No relay, no server, no trust in whoever handed them over. |
 
 ## Two design notes that cost something to learn
 
@@ -81,10 +106,25 @@ retry and the rebuilt event has different bytes, a different id, and the relay s
 copy of a message the agent already sent — the exact thing the reservation exists to prevent.
 `examples/echo-agent/src/demo.ts` stages that failure on purpose.
 
+**An action chain is ordered by its parent links, never by `created_at`.** The loop completes
+inside one second and `created_at` has one-second resolution, so NIP-01's `(created_at, id)`
+order falls through to a hash tiebreak and shuffles the transitions — `verifyActionChain` used
+to reject honest chains about half the time. Millisecond resolution would not have fixed it:
+`created_at` is a client-supplied wall clock, and the ordering that decides whether an execution
+was legal must not be a field the executing party picks.
+
+**A stranger's event can never make a chain invalid.** Only the proposer's transitions count and
+only the proposer's `approval_request` names the approvers — but anyone else's are warnings, not
+errors. Counting them would let any member forge an outcome; erroring on them would let any
+member veto any action forever with one junk event, and every event here is valid on a generic
+relay that will happily store it. A chain is invalid only when the party doing the work did
+something illegitimate, which is the rule `tallyApprovals` already applied to responses from
+people nobody asked.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 67 tests
+pnpm --filter @quorum/sdk test        # 115 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

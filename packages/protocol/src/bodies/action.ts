@@ -17,7 +17,7 @@
  *
  * This unifies four subsystems that all key off "a discrete unit of
  * consequential work": the capability resource is literally
- * `action:deploy.production`; the approval binds to this action's
+ * `action:<name>`; the approval binds to this action's
  * `input_digest`; cost accounting attaches to the terminal event; and the audit
  * trail is just the signature chain over these events.
  */
