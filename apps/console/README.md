@@ -56,6 +56,21 @@ q workspace add bot
 q workspace members          # the relay's own signed 39002, not a scan of who has posted
 ```
 
+`add` works here because you made the bot's key yourself a moment ago. The usual case is the
+opposite — an agent somebody else will run, whose key does not exist yet — and for that there
+is an invitation:
+
+```bash
+q workspace invite bot --expires 3600   # a group:join grant, signed by ada
+q workspace join --as bot               # bot presents it; the relay admits it
+```
+
+Getting in is a capability like any other, which is the point of doing it this way rather than
+with a membership table. The relay refuses a join request from anyone holding no grant, the
+invitation can be handed over with a key that has not been generated yet, and `q revoke bot
+group:join` withdraws it. Revoking does not put an existing member out, though — that is
+`q workspace remove bot`, and an operator who means both has to do both.
+
 Give the agent a capability. Note the shape: `action:deploy` narrowed by a **scope**, never
 `action:deploy.production` — a resource name matches exactly and never narrows, so encoding the
 environment in the name leaves a delegation nothing to intersect with.
@@ -155,7 +170,8 @@ mid-flight.
 | | |
 | --- | --- |
 | `keygen <name>` · `use <name>` · `whoami [--all]` | identities on this machine |
-| `workspace create\|add\|members\|use` | NIP-29 group membership, which is the relay's business |
+| `workspace create\|add\|remove\|members\|use` | NIP-29 group membership, which is the relay's business |
+| `workspace invite <who> [--expires]` · `workspace join` | the same thing as a capability: sign an invitation, or present one |
 | `grant <who> <resource>` | `--scope k=v` (repeatable) · `--actions` · `--expires` · `--max-uses` |
 | `revoke <who> <resource>` | same `--scope` as the grant: it identifies the coordinate |
 | `grants [who]` | what a key currently holds, revocations and expiries applied |
@@ -179,7 +195,7 @@ taken back from.
 pnpm --filter @quorum/console test
 ```
 
-49 tests over the parts where being wrong is quiet: argument parsing and `--set` edits
+34 tests over the parts where being wrong is quiet: argument parsing and `--set` edits
 (`args.test.ts`), what counts as waiting on you (`inbox.test.ts`), key file permissions and
 path traversal (`config.test.ts`), and what a grant listing claims a capability covers
 (`grants.test.ts`).

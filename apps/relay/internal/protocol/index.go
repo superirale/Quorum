@@ -46,11 +46,26 @@ type Envelope struct {
 	AddressMarker string   `json:"address_marker"`
 }
 
+// RelayEnforced names the handful of capabilities a relay has to check itself,
+// because they have no resource anywhere else to check them.
+//
+// Published as data for the same reason the envelope table is. A resource name
+// is matched exactly and never widened — that is what makes the capability
+// system safe — which also means a relay and a console that disagree by one
+// character produce a grant that authorises nothing and reports no error. This
+// relay refuses to start on that disagreement; see policy.ConfirmResourceNames.
+type RelayEnforced struct {
+	Action    string            `json:"action"`
+	ScopeKey  string            `json:"scope_key"`
+	Resources map[string]string `json:"resources"`
+}
+
 // Index is schemas/index.json, plus the body schemas resolved alongside it.
 type Index struct {
 	Version        string          `json:"version"`
 	Kinds          map[string]Kind `json:"kinds"`
 	SupportedKinds []string        `json:"supported_kinds"`
+	RelayEnforced  RelayEnforced   `json:"relay_enforced"`
 	Envelope       Envelope        `json:"envelope"`
 
 	// Derived at load time so the hot path does no string parsing.

@@ -155,6 +155,14 @@
     "5600",
     "6600"
   ],
+  "relay_enforced": {
+    "action": "invoke",
+    "scope_key": "group",
+    "resources": {
+      "group:join": "admits the grantee to the workspace named in the scope",
+      "thread:budget": "sets a thread's spending ceiling"
+    }
+  },
   "envelope": {
     "required_tags": [
       "h",

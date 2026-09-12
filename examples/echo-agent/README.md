@@ -50,6 +50,10 @@ relay29 requires (without it the agent is refused by `CLOSED` and goes permanent
 that events the SDK builds pass validation against the committed JSON Schema — the spec as an
 independent implementation in another language reads it.
 
+It also has to get the bot into the workspace, which is now three lines rather than one: ada
+creates the group, signs a `group:join` grant, and the bot presents it by publishing a join
+request. The relay used to admit anyone who asked.
+
 ## As a real process
 
 ```sh

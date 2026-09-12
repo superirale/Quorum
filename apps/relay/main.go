@@ -56,6 +56,17 @@ var relaySignedKinds = []int{
 	8108, // checkpoint
 }
 
+// Who may confer a capability inside a workspace.
+//
+// Owners and admins, because both can already admit a member by hand with a
+// kind 9000 — so honouring a grant they signed hands over nothing they could
+// not do directly. Moderators are excluded for the same reason they cannot put
+// users: removing people is not the same authority as letting them in.
+var authority = policy.Authority{
+	Roles:       []string{roleOwner.Name, roleAdmin.Name},
+	CreatorRole: roleOwner.Name,
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "quorum-relay: %v\n", err)
@@ -139,6 +150,12 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 			err,
 		)
 	}
+	// Fatal for the same reason, one step further in: a relay whose idea of
+	// `group:join` differs from the console's by a character enforces a
+	// capability nobody can be granted.
+	if err := policy.ConfirmResourceNames(index.RelayEnforced); err != nil {
+		return nil, nil, nil, fmt.Errorf("the relay and the protocol disagree: %w", err)
+	}
 
 	db := &badger.BadgerBackend{
 		Path: filepath.Join(cfg.DataDir, "events"),
@@ -198,6 +215,8 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		// been refused without touching a disk.
 		policy.RejectForeignActionTransitions(db),
 		policy.RejectUnaskedApprovals(index, db),
+		policy.RequireGrantToJoin(db, authority),
+		policy.RequireGrantToSetBudget(db, authority),
 	)
 
 	if cfg.EventsPerMinute > 0 {

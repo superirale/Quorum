@@ -53,6 +53,15 @@ that signature itself before doing anything. Grants are signed addressable event
 the resource; a delegation intersects with them and can only ever narrow. The whole chain
 verifies offline, from the events alone, with no relay and no server.
 
+**M4 finished properly** — membership is a capability too. The relay used to admit anyone who
+published a join request, which meant a workspace full of signed approvals had an open front
+door and the console printed a warning about it on every group creation. Now there are two ways
+in and no others: an admin admits you directly, or an admin signs you a `group:join` grant that
+you present yourself — revocable, expirable, and checkable by anyone without the relay being
+believed. A demoted admin's outstanding invitations stop working. Setting a thread's spending
+ceiling needs a `thread:budget` grant for the same reason: a budget is what stops a runaway
+agent, so raising it is authority rather than coordination.
+
 **The operator console** ([`apps/console`](apps/console)) closes the gap those milestones left:
 agents had a way into a workspace and humans did not. `quorum` creates the group, issues the
 grant, posts the request, and signs or refuses what comes back — the same loop the demos narrate,

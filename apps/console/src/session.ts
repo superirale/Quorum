@@ -19,7 +19,7 @@ import { FileStore } from '@quorum/sdk/node'
 import { home, loadConfig, loadKey, type Config } from './config.ts'
 
 /** NIP-29 management kinds. Not Quorum kinds, so they are signed raw. */
-export const NIP29 = { createGroup: 9007, putUser: 9000, joinRequest: 9021 } as const
+export const NIP29 = { createGroup: 9007, putUser: 9000, removeUser: 9001, joinRequest: 9021 } as const
 
 export interface Session {
   config: Config

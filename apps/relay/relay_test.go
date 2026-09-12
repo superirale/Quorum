@@ -147,20 +147,41 @@ func createGroup(t *testing.T, conn *nostr.Relay, owner actor) {
 	})
 }
 
-func join(t *testing.T, conn *nostr.Relay, who actor) {
+// admit adds a member the way `quorum workspace add` does: an owner publishes a
+// put-user naming them.
+//
+// This used to be a kind 9021 the joiner signed themselves, which worked
+// because the relay admitted anyone who asked. It no longer does — see
+// capability_test.go — and the tests that only need a populated workspace say
+// so through the owner, which is the path an operator actually uses.
+func admit(t *testing.T, conn *nostr.Relay, owner, who actor) {
 	t.Helper()
-	mustPublish(t, conn, who, &nostr.Event{
-		Kind: nostr.KindSimpleGroupJoinRequest,
-		Tags: nostr.Tags{{"h", group}},
+	mustPublish(t, conn, owner, &nostr.Event{
+		Kind: nostr.KindSimpleGroupPutUser,
+		Tags: nostr.Tags{{"h", group}, {"p", who.pubkey}},
 	})
-	// The relay adds the member on a post-save hook, so the next write races it.
+	waitForMembership(t, conn, who)
+}
+
+// waitForMembership blocks until the relay's own member list names someone.
+//
+// Membership is applied on a post-save hook, so the put-user being stored is
+// not yet the member being able to write — and the next line of a test usually
+// is them writing. Kind 39002 is generated from the in-memory group state
+// rather than read back from the store, which makes it the one answer that
+// cannot be ahead of the thing being waited for.
+func waitForMembership(t *testing.T, conn *nostr.Relay, who actor) {
+	t.Helper()
 	waitFor(t, fmt.Sprintf("%s to be admitted", who.name), func() bool {
-		for _, event := range query(t, conn, nostr.Filter{
-			Kinds: []int{nostr.KindSimpleGroupPutUser},
-			Tags:  nostr.TagMap{"h": []string{group}, "p": []string{who.pubkey}},
+		for _, list := range query(t, conn, nostr.Filter{
+			Kinds: []int{39002},
+			Tags:  nostr.TagMap{"d": []string{group}},
 		}) {
-			_ = event
-			return true
+			for _, tag := range list.Tags {
+				if len(tag) > 1 && tag[0] == "p" && tag[1] == who.pubkey {
+					return true
+				}
+			}
 		}
 		return false
 	})
@@ -216,7 +237,7 @@ func TestTwoHumansChatAndAGenericClientReadsIt(t *testing.T) {
 	bobConn := relay.connect(t, bob)
 
 	createGroup(t, aliceConn, alice)
-	join(t, bobConn, bob)
+	admit(t, aliceConn, alice, bob)
 
 	mustPublish(t, aliceConn, alice, chat("shipping the payments fix today"))
 	mustPublish(t, bobConn, bob, chat("what's the rollback plan"))

@@ -25,6 +25,7 @@
 
 import {
   Kinds,
+  Resource,
   TagName,
   digest,
   refTo,
@@ -71,22 +72,6 @@ await adaClient.connect()
 await malloryClient.connect()
 
 await publishRaw(adaClient, ada, { kind: NIP29.createGroup, tags: [['h', group]], content: '' })
-for (const [client, who] of [
-  [malloryClient, mallory],
-  [adaClient, bot],
-] as const) {
-  await publishRaw(client, who, { kind: NIP29.joinRequest, tags: [['h', group]], content: '' })
-}
-// The bot's join is signed by the bot, not by Ada — `publishRaw` above signs
-// with `who`, so Ada's client merely carries it. Auto-admit is still open; M4's
-// remaining gap is wiring grants into membership.
-await waitFor('the members to be admitted', async () => {
-  const admitted = await adaClient.query([
-    { kinds: [NIP29.putUser], '#h': [group], '#p': [bot.publicKey, mallory.publicKey] },
-  ])
-  return admitted.length >= 2
-})
-ok('the relay admitted the bot and mallory to the group')
 
 const publisher = new Publisher({
   client: adaClient,
@@ -102,10 +87,56 @@ const malloryPublisher = new Publisher({
   group,
   counters: await Counters.load(new MemoryStore(), mallory.publicKey),
 })
+const grants = new Grants({ client: adaClient, group, publisher })
+
+// --- getting in ---------------------------------------------------------------
+
+// Membership is a capability like any other, and this is the negative control
+// for it. Mallory asks to join a workspace nobody invited her to; until the
+// relay consulted grants, that request was the whole mechanism and it always
+// worked. The rest of this file then makes her a member anyway — the interesting
+// thing about mallory is what she can do once she is inside, not whether she can
+// get in, and having Ada put her there is how she gets the same standing an
+// ordinary colleague has.
+expect(
+  await refused(
+    malloryClient,
+    await signRaw(mallory, { kind: NIP29.joinRequest, tags: [['h', group]], content: '' }),
+    'group:join',
+  ),
+  'the relay refused a join request from someone nobody invited',
+)
+await publishRaw(adaClient, ada, {
+  kind: NIP29.putUser,
+  tags: [
+    ['h', group],
+    ['p', mallory.publicKey],
+  ],
+  content: '',
+})
+
+// The bot gets in the other way: Ada signs it an invitation, and it presents
+// itself. The join request below is signed by the bot, not by Ada — `publishRaw`
+// signs with `who`, so Ada's client merely carries it — and the relay admits it
+// on the strength of the grant rather than the asking.
+await grants.issue({
+  grantee: bot.publicKey,
+  resource: Resource.Join,
+  actions: ['invoke'],
+  scope: { group },
+})
+await publishRaw(adaClient, bot, { kind: NIP29.joinRequest, tags: [['h', group]], content: '' })
+
+await waitFor('the members to be admitted', async () => {
+  const admitted = await adaClient.query([
+    { kinds: [NIP29.putUser], '#h': [group], '#p': [bot.publicKey, mallory.publicKey] },
+  ])
+  return admitted.length >= 2
+})
+ok('the relay admitted mallory by put-user and the bot on Ada’s invitation')
 
 // --- the grant ---------------------------------------------------------------
 
-const grants = new Grants({ client: adaClient, group, publisher })
 await grants.issue({
   grantee: bot.publicKey,
   resource: RESOURCE,
@@ -255,13 +286,19 @@ async function publishRaw(
   signer: LocalSigner,
   event: Omit<UnsignedEvent, 'pubkey' | 'created_at'>,
 ): Promise<void> {
-  await client.publish(
-    await signer.sign({
-      ...event,
-      pubkey: signer.publicKey,
-      created_at: Math.floor(Date.now() / 1000),
-    }),
-  )
+  await client.publish(await signRaw(signer, event))
+}
+
+/** The same, stopping short of publishing, for the ones expected to be refused. */
+function signRaw(
+  signer: LocalSigner,
+  event: Omit<UnsignedEvent, 'pubkey' | 'created_at'>,
+): Promise<NostrEvent> {
+  return signer.sign({
+    ...event,
+    pubkey: signer.publicKey,
+    created_at: Math.floor(Date.now() / 1000),
+  })
 }
 
 async function waitFor(what: string, done: () => Promise<boolean>): Promise<void> {

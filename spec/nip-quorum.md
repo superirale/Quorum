@@ -60,6 +60,7 @@ This NIP defines no chat or threading kinds of its own. It reuses:
 | 1111 | NIP-22 | Comment. All replies within a thread. |
 | 5 | NIP-09 | Deletion request (advisory). |
 | 22242 | NIP-42 | Relay AUTH. |
+| 9000/9001/9021 | NIP-29 | Put-user, remove-user, join request. See [the two resources the relay owns](#the-two-resources-the-relay-owns). |
 | 39000–39002 | NIP-29 | Group metadata, admins, members. |
 | 443/444/445 | Marmot | MLS KeyPackage, Welcome, Group Event (`mls` mode only). |
 
@@ -230,6 +231,13 @@ carries `folded_from` listing the ops it incorporated, which makes the relay's
 projection auditable rather than merely asserted. Without such a relay, clients
 fold locally and reach the same state.
 
+Most ops are ordinary workspace traffic — claiming a task, marking it done — and
+any member may publish them. `set_budget` is not: a thread's spending ceiling is
+what stops a runaway agent, so raising it is an authority decision rather than a
+coordination one. A relay implementing this NIP SHOULD require a `thread:budget`
+capability for `set_budget` and leave the other ops open to members. See
+[the two resources the relay owns](#the-two-resources-the-relay-owns).
+
 ## Actions
 
 There is deliberately no `tool_call`/`tool_result` pair. A relay does not run
@@ -360,6 +368,48 @@ matching no resource anyone requested is invisible.
 before acting. A Quorum-aware relay MAY also enforce on plaintext channels as
 defence in depth, but MUST NOT be the only thing between an agent and production
 — that would reintroduce exactly the trusted server this design removes.
+
+### The two resources the relay owns
+
+Two resources are the exception to that rule, because for them the relay *is* the
+resource. Nothing else can hold them:
+
+| Resource | What holding it permits |
+| --- | --- |
+| `group:join` | The relay admits the grantee to the group named in `scope.group`. |
+| `thread:budget` | The holder may publish a `set_budget` `thread_op`. |
+
+`group:join` is the coarsest capability in the system — being in the workspace at
+all — and the one most easily left implicit. NIP-29 says a relay MAY admit a kind
+9021 join request to an open group; a workspace holding approval records and
+capability grants MUST NOT. A relay implementing this NIP SHOULD refuse a join
+request unless the requester holds an unexpired, unrevoked `group:join` grant
+whose `scope.group` is that group, issued by an owner or admin of it, or unless
+an admin admits them directly with a kind 9000.
+
+Three consequences follow from membership being a grant rather than a row. It can
+be issued to a key that does not exist yet and handed over with the key, which is
+the ordinary case for an agent somebody else will run. It can be revoked, and a
+third party can check who issued it without taking the relay's word. And it is
+subject to the same `expires_at` the rest of the system uses.
+
+`max_uses` cannot be enforced on either of these and MUST be ignored rather than
+half-honoured: counting uses requires a caller to ask "how many times so far",
+and there is none — a relay counting for itself would be asserting a fact nobody
+can check. An invitation that should not stand forever bounds itself with
+`expires_at`.
+
+**Revoking `group:join` does not evict an existing member.** The grant answers
+"may this key come in", asked once at the door; membership is the relay's own
+state thereafter. Cancelling a keycard does not un-enter the building. Removing
+someone is a NIP-29 kind 9001, and an operator who means both MUST do both.
+
+Because these two names are matched exactly and are not otherwise reachable from
+code, a relay SHOULD verify at startup that the names it enforces are the names
+the protocol publishes — `relay_enforced` in `schemas/index.json` exists for
+that. A one-character divergence is not a build error and not a rejected event.
+It is an operator issuing `group:jion`, seeing a green tick, and finding the
+grantee still cannot get in.
 
 **Delegation never escalates.** An action MAY carry `on_behalf_of` referencing a
 38106 `delegation` signed by a human. The effective permission is the
@@ -518,7 +568,8 @@ permanent. Implementations MUST NOT place secrets or personal data in events, an
 every body, generated from the same source and committed to the repository so
 that implementations in other languages validate against the same rules rather
 than a prose reading of them. `schemas/index.json` publishes the per-kind
-envelope requirements as data for the same reason.
+envelope requirements as data for the same reason, and `relay_enforced` names the
+two resources a relay checks so that no implementation has to hand-copy them.
 
 A signed golden transcript of the full loop — request, proposal, approval,
 execution — is committed at `fixtures/deploy-approval.json`, and

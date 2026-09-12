@@ -14,6 +14,7 @@ import { ALT_MAX_LENGTH } from '../src/alt.ts'
 import { BODY_SCHEMAS } from '../src/bodies/index.ts'
 import { NostrEventSchema } from '../src/event.ts'
 import { QUORUM_KINDS, SUPPORTED_KINDS, kindName } from '../src/kinds.ts'
+import { INVOKE, Resource, SCOPE_GROUP } from '../src/resources.ts'
 import { ADDRESS_MARKER, ENC_MODES } from '../src/tags.ts'
 import { REQUIREMENTS } from '../src/validate.ts'
 import { PROTOCOL_VERSION } from '../src/version.ts'
@@ -86,6 +87,19 @@ export function generate(): Record<string, unknown> {
       ]),
     ),
     supported_kinds: SUPPORTED_KINDS.map(String),
+    // The two capabilities a relay must check itself, because they have no
+    // resource anywhere else. Published as data for the same reason the envelope
+    // table is: a resource name is matched exactly, so the Go relay and this
+    // package disagreeing by one character is a grant that authorises nothing
+    // and reports no error.
+    relay_enforced: {
+      action: INVOKE,
+      scope_key: SCOPE_GROUP,
+      resources: {
+        [Resource.Join]: 'admits the grantee to the workspace named in the scope',
+        [Resource.ThreadBudget]: "sets a thread's spending ceiling",
+      },
+    },
     envelope: {
       required_tags: ['h', 'alt'],
       alt_max_length: ALT_MAX_LENGTH,

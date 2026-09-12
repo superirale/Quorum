@@ -91,6 +91,10 @@ ${bold('identity')}
 ${bold('workspace')}
   workspace create <group>   create it and become its admin
   workspace add <who>        admit a member ${dim('(name or hex pubkey)')}
+  workspace invite <who>     sign a join capability they present themselves
+      --expires <seconds>    from now
+  workspace join             present the invitation you were given
+  workspace remove <who>     put someone out ${dim('(revoke their invitation too)')}
   workspace members          who is in it
   workspace use <group>      work in this group from now on
 

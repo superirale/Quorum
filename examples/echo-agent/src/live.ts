@@ -24,9 +24,10 @@
  * Exits non-zero on the first failed expectation.
  */
 
-import { Kinds, refTo, type NostrEvent, type UnsignedEvent } from '@quorum/protocol'
+import { Kinds, Resource, refTo, type NostrEvent, type UnsignedEvent } from '@quorum/protocol'
 import {
   Counters,
+  Grants,
   LocalSigner,
   MemoryStore,
   Publisher,
@@ -57,10 +58,29 @@ const botClient = new RelayClient({ url, signer: bot })
 await adaClient.connect()
 await botClient.connect()
 
-// Ada creates the workspace, which makes her its admin. The bot asks to join;
-// the relay's auto-admit is open until M4 wires capability grants into
-// membership, and that gap is why this is two lines rather than an approval.
+const publisher = new Publisher({
+  client: adaClient,
+  signer: ada,
+  pubkey: ada.publicKey,
+  group,
+  counters: await Counters.load(new MemoryStore(), ada.publicKey),
+})
+
+// Ada creates the workspace, which makes her its admin, and signs the bot an
+// invitation. Then the bot presents itself.
+//
+// The grant is what makes the second line work. The relay used to admit anyone
+// who published a join request, so this was two lines and no signature; now it
+// reads ada's `group:join` capability, checks she is an admin of this group, and
+// refuses the request outright if she never issued one. Membership is the
+// coarsest capability in the system and it is granted like any other.
 await publishRaw(adaClient, ada, { kind: NIP29.createGroup, tags: [['h', group]], content: '' })
+await new Grants({ client: adaClient, group, publisher }).issue({
+  grantee: bot.publicKey,
+  resource: Resource.Join,
+  actions: ['invoke'],
+  scope: { group },
+})
 await publishRaw(botClient, bot, { kind: NIP29.joinRequest, tags: [['h', group]], content: '' })
 await waitFor('the bot to be admitted', async () => {
   const admitted = await adaClient.query([
@@ -69,7 +89,7 @@ await waitFor('the bot to be admitted', async () => {
   ])
   return admitted.length > 0
 })
-ok('the relay admitted the bot to the group')
+ok('the relay admitted the bot, on ada’s signed invitation')
 
 const agent = createAgent({
   relay: url,
@@ -84,14 +104,6 @@ agent.on(async (event, ctx) => {
 })
 await agent.start()
 ok('the agent subscribed — its `#p` filter was not refused')
-
-const publisher = new Publisher({
-  client: adaClient,
-  signer: ada,
-  pubkey: ada.publicKey,
-  group,
-  counters: await Counters.load(new MemoryStore(), ada.publicKey),
-})
 
 // 1. addressing.
 const thread = await publisher.publish({

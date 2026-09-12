@@ -77,7 +77,7 @@ func gate(t *testing.T, r testRelay, agent, ada actor) (root, actionID, requestI
 
 	agentConn := r.connect(t, agent)
 	createGroup(t, agentConn, agent)
-	join(t, r.connect(t, ada), ada)
+	admit(t, agentConn, agent, ada)
 
 	rootEvent := mustPublish(t, agentConn, agent, thread("deploy"))
 	proposed := mustPublish(t, agentConn, agent, action(rootEvent.ID, map[string]any{
@@ -110,7 +110,7 @@ func TestAnApprovalFromSomeoneWhoWasNeverAskedIsRefused(t *testing.T) {
 	root, actionID, requestID := gate(t, relay, agent, ada)
 
 	malloryConn := relay.connect(t, mallory)
-	join(t, malloryConn, mallory)
+	admit(t, relay.connect(t, agent), agent, mallory)
 
 	msg := publish(t, malloryConn, mallory,
 		approvalResponse(root, requestID, actionID, inputDigestHex, "approved"))
@@ -152,7 +152,7 @@ func TestAForeignTransitionIsRefused(t *testing.T) {
 	root, actionID, _ := gate(t, relay, agent, ada)
 
 	malloryConn := relay.connect(t, mallory)
-	join(t, malloryConn, mallory)
+	admit(t, relay.connect(t, agent), agent, mallory)
 
 	msg := publish(t, malloryConn, mallory, transition(root, actionID, "succeeded"))
 	assertRejected(t, msg, "proposed an action may advance it")
@@ -167,7 +167,7 @@ func TestAForeignApprovalRequestIsRefused(t *testing.T) {
 	root, actionID, _ := gate(t, relay, agent, ada)
 
 	malloryConn := relay.connect(t, mallory)
-	join(t, malloryConn, mallory)
+	admit(t, relay.connect(t, agent), agent, mallory)
 
 	msg := publish(t, malloryConn, mallory,
 		approvalRequest(root, actionID, inputDigestHex, mallory.pubkey))
@@ -211,7 +211,7 @@ func TestAChainThisRelayDoesNotHoldIsLetThrough(t *testing.T) {
 	agentConn := relay.connect(t, agent)
 	createGroup(t, agentConn, agent)
 	adaConn := relay.connect(t, ada)
-	join(t, adaConn, ada)
+	admit(t, agentConn, agent, ada)
 
 	root := mustPublish(t, agentConn, agent, thread("deploy")).ID
 	elsewhere := strings.Repeat("cd", 32)

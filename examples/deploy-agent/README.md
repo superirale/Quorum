@@ -81,6 +81,11 @@ tests, and neither suite can catch the failure that matters most — a relay pol
 to reject honest SDK traffic looks like a green board on both sides and a hung agent in
 production. `live.ts` runs the loop over a socket and checks both directions.
 
+It opens with the coarsest capability of the lot. Mallory asks to join a workspace nobody
+invited her to and the relay refuses; Ada then admits her with a put-user, because the
+interesting thing about mallory is what she can do once she is inside. The bot gets in the other
+way — Ada signs it a `group:join` grant and it presents itself.
+
 The relay is defence in depth and never the authority. It refuses what it can prove wrong from
 events it holds, and **fails open on what it cannot see**: events legitimately travel between
 relays, so a relay that rejected every approval whose request it has not got would break

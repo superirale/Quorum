@@ -79,17 +79,30 @@ actor's role · deleted events stay deleted · `previous` tag checking.
    `proposed` may advance it.
 8. `RejectUnaskedApprovals` — an 8103 must answer an 8102, in the same group,
    from a pubkey that 8102 addressed, echoing its `input_digest`.
+9. `RequireGrantToJoin` — a kind 9021 join request needs a `group:join` grant
+   from an owner or admin of that group. See [Membership](#membership).
+10. `RequireGrantToSetBudget` — a `set_budget` thread op needs `thread:budget`.
+    Every other op stays open to members.
 
-The last two are last because they are the only policies that read the database.
-An event that is malformed, out of range or from a stranger has already been
-refused without touching a disk.
+The last four are last because they are the only policies that read the
+database. An event that is malformed, out of range or from a stranger has
+already been refused without touching a disk.
 
-They also **fail open when the relay does not hold the referenced event**, and
-that is deliberate rather than an oversight. Events legitimately travel between
-relays; a relay that rejected every approval whose request it has not got would
-break federation to catch nothing, since whoever forged it can simply publish
-the request too. The SDK's auditor makes no such allowance — it is handed the
-whole chain and is the party being asked to act on the answer.
+The two approval policies **fail open when the relay does not hold the
+referenced event**, and that is deliberate rather than an oversight. Events
+legitimately travel between relays; a relay that rejected every approval whose
+request it has not got would break federation to catch nothing, since whoever
+forged it can simply publish the request too. The SDK's auditor makes no such
+allowance — it is handed the whole chain and is the party being asked to act on
+the answer.
+
+The two capability policies **fail closed**, and the asymmetry is not an
+inconsistency. Those two ask a different question. "I have not seen the request
+this answers" is ordinary in a federated system; "I have not seen a grant
+admitting you" is the ordinary state of everyone who was never invited, and a
+relay that let an absent grant mean yes would be back to admitting anyone who
+asks. A grant is also the one thing the requester could always have brought with
+them — it is addressable, so presenting it is publishing it.
 
 That division is the point. **The relay is defence in depth and is never the
 authority.** It refuses what it can prove wrong from events it holds; a resource
@@ -98,6 +111,51 @@ signatures, with no relay involved. `examples/deploy-agent` is that resource.
 
 There is deliberately **no `h`-tag check of our own**: relay29's
 `RequireHTagForExistingGroup` is strictly stronger.
+
+## Membership
+
+There are two ways into a workspace and no others:
+
+- **An admin admits you** — a NIP-29 kind 9000 put-user, which relay29 already
+  restricts to admins. `quorum workspace add <who>`.
+- **An admin signed you an invitation** — a `group:join` capability grant scoped
+  to that group, which you present by publishing a kind 9021 join request. The
+  relay reads the grant and admits you itself. `quorum workspace invite <who>`,
+  then `quorum workspace join`.
+
+Asking is not one of them. relay29 admits any join request to an open group,
+which is the correct NIP-29 default and the wrong one for a workspace holding
+approval records and capability grants, so `RequireGrantToJoin` refuses the 9021
+outright. That matters more than it looks: khatru runs `OnEventSaved` only for
+events it stored, and relay29's auto-admit hook is registered there — refusing
+the event therefore disarms the hook without forking relay29.
+
+What the relay checks, in `internal/policy/capability.go`:
+
+- a 38102 addressed to the requester, resource `group:join`, action `invoke`,
+  `scope.group` equal to this group;
+- not revoked and not expired, by `effectiveAddressable` rather than simply the
+  latest — ties break toward *less* authority, so a same-second revocation wins;
+- the issuer is an owner or admin of this group **now**, recomputed by replaying
+  9007/9000/9001 oldest-first. A demoted admin's outstanding invitations stop
+  working, which is the property that makes demotion mean anything.
+
+`max_uses` is ignored on both relay-enforced resources rather than half-honoured:
+counting uses needs a caller to ask "how many so far", and there is none. Bound
+an invitation with `expires_at` instead.
+
+**Revoking a `group:join` does not evict an existing member.** The grant answers
+a question asked once, at the door. Removing someone is a kind 9001
+(`quorum workspace remove`), and an operator who means both must do both.
+
+Two traps worth knowing. A revocation published in the same second as the grant
+**is silently dropped** — khatru v0.17.7 with no `ReplaceEvent` hook keeps the
+stored event unless the incoming one is strictly newer, so `revoke` immediately
+after `invite` can leave the invitation standing. And the resource names are a
+second copy of `packages/protocol/src/resources.ts`; a one-character divergence
+would be an operator granting `group:jion`, seeing a green tick, and watching
+the grantee stay out. `policy.ConfirmResourceNames` reads the names back from
+`schemas/index.json` at startup and the relay refuses to boot if they disagree.
 
 ## Thread state
 
@@ -145,16 +203,14 @@ matched nothing. Read `Subscription.ClosedReason`.
 
 ## Known gaps
 
-- **Anyone may join an open group.** relay29 admits any join request unless the
-  group is marked closed, which is wrong for a workspace holding approval
-  records and capability grants. Still open after M4 — the approval and
-  transition policies landed, membership did not. Mark groups closed and add
-  members explicitly in the meantime.
 - **Reads are open by default.** `QUORUM_REQUIRE_AUTH=true` demands NIP-42.
   Private groups already require auth regardless.
-- **The relay does not yet check who may change a thread's state.** Any member
-  can publish a `thread_op`. The grant machinery exists as of M4; the relay does
-  not yet consult it here.
+- **Only `set_budget` is authorised among the thread ops.** Any member may still
+  claim, block or close a thread. That is intended for now — those are
+  coordination, and a workspace where taking a task needs a capability is a
+  workspace nobody works in — but it means `thread_op` is not uniformly gated,
+  and the day one of the other ops becomes consequential it will need its own
+  resource.
 - **Checkpoints (kind 8108) are reserved but not produced.** That is M7. The
   forgery policy already covers the kind so nobody can squat it in the meantime.
 
