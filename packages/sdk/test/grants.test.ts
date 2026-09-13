@@ -18,6 +18,7 @@ import {
   grantId,
   intersect,
   latestAddressable,
+  summariseGrants,
   type DelegationOptions,
   type GrantOptions,
 } from '../src/index.ts'
@@ -425,6 +426,106 @@ describe('intersect', () => {
     assert.ok(narrowed > 0, 'a test where nothing was ever narrowed proves nothing')
   })
 })
+
+/**
+ * The listing an operator reads before deciding whether to issue a capability.
+ *
+ * `summariseGrant` is covered by the console's renderer tests; what is new here
+ * is the aggregation — which of several events at one coordinate survives, what
+ * happens to the ones that authorise nothing, and whether two readings of the
+ * same workspace can be diffed. A listing that quietly drops a revocation, or
+ * that reorders itself between refreshes, is worse than no listing: the first
+ * invites an operator to leave a withdrawn capability in place, the second makes
+ * every diff look like a change.
+ */
+describe('summariseGrants', () => {
+  it('shows a same-second revocation rather than the grant it withdraws', async () => {
+    // The trap `effectiveAddressable` exists for. Both events share a `d` and a
+    // second, and NIP-01's tiebreak is a hash comparison, so a newest-wins
+    // reading picks the grant half the time and reports a capability the
+    // operator has already withdrawn.
+    //
+    // Half the time is the problem: written the obvious way this test passes
+    // against a broken implementation on one run in two. So the pair is rebuilt
+    // — varying `issued_at`, which changes the bytes and nothing that is
+    // asserted — until the hash falls the wrong way and only the tie rule can
+    // save it.
+    const pair = await sameSecondPair()
+    const summaries = summariseGrants([pair.grant, pair.revocation], NOW)
+
+    assert.ok(pair.revocation.id > pair.grant.id, 'the id tiebreak favours the grant')
+    assert.equal(summaries.length, 1, 'one coordinate, one row')
+    assert.equal(summaries[0]?.state, 'revoked')
+    assert.equal(summaries[0]?.revokedReason, 'left the team')
+  })
+
+  it('still lists an expired grant, marked expired', async () => {
+    // Expiry is not replacement: the event is still the newest at its
+    // coordinate, so it is still what the relay serves. Dropping it would leave
+    // an operator wondering where the capability went, and re-issuing it is the
+    // wrong reflex if the agent was meant to lose it an hour ago.
+    const g = await issue(ada, { expiresAt: NOW - HOUR })
+    const summaries = summariseGrants([g], NOW)
+    assert.equal(summaries.length, 1)
+    assert.equal(summaries[0]?.state, 'expired')
+    assert.equal(summaries[0]?.expiresAt, NOW - HOUR)
+  })
+
+  it('reads the same workspace the same way twice', async () => {
+    const events = [
+      await issue(ada, { resource: 'action:deploy.staging' }),
+      await issue(ada, { grantee: bob.pubkey, resource: 'group:join' }),
+      await issue(ada),
+      await delegate(ada, { resources: [DEPLOY] }),
+    ]
+
+    const once = summariseGrants(events, NOW).map((s) => s.event.id)
+    const again = summariseGrants([...events].reverse(), NOW).map((s) => s.event.id)
+    assert.deepEqual(again, once, 'arrival order must not change the listing')
+    assert.equal(once.length, 4)
+  })
+
+  it('survives junk published at a capability coordinate', async () => {
+    // Any member can sign a 38102 with anything in it and every relay will store
+    // it. One bad row must not take the listing down with it.
+    const junk = await ada.signer.sign({
+      kind: Kinds.CapabilityGrant,
+      pubkey: ada.pubkey,
+      created_at: NOW,
+      tags: [['h', 'payments'], ['d', 'junk'], ['alt', 'a capability grant']],
+      content: 'not json',
+    })
+    const good = await issue(ada)
+
+    const summaries = summariseGrants([junk, good], NOW)
+    assert.equal(summaries.length, 2)
+    const bad = summaries.find((s) => s.event.id === junk.id)
+    assert.equal(bad?.state, 'invalid')
+    assert.equal(bad?.problem, 'unparseable')
+    assert.equal(summaries.find((s) => s.event.id === good.id)?.state, 'active')
+  })
+
+  it('ignores everything that is not a capability', async () => {
+    const chat = await ada.sign({ kind: Kinds.ChatMessage, text: 'morning' })
+    assert.deepEqual(summariseGrants([chat], NOW), [])
+  })
+})
+
+/**
+ * A grant and its revocation at the same coordinate and the same second, with
+ * the ids arranged so that NIP-01's tiebreak prefers the grant.
+ */
+async function sameSecondPair(): Promise<{ grant: NostrEvent; revocation: NostrEvent }> {
+  for (let issuedAt = NOW; issuedAt > NOW - 64; issuedAt--) {
+    const g = await issue(ada, { id: 'same-second', issuedAt })
+    const r = await ada.sign({
+      ...grant({ ...baseGrant, id: 'same-second', revoked: true, revokedReason: 'left the team' }),
+      created_at: g.created_at,
+    })
+    if (r.id > g.id) return { grant: g, revocation: r }
+  }
+  throw new Error('64 pairs and the revocation was always the lower id — suspect the builder')
+}
 
 interface Attempt {
   scope?: Record<string, unknown>

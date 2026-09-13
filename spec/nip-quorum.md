@@ -456,6 +456,35 @@ double-execution safe. That comes from idempotent effects and content-addressed
 ids, and an implementation that treats a held lease as permission to skip them
 has misread this section.
 
+## Presence
+
+A `presence` (28103) event carries `status` (`online`/`busy`/`offline`), an
+optional `activity` caption, and `ttl_seconds`. An agent republishes while it
+runs and SHOULD publish `offline` on a clean shutdown.
+
+**A beat expires at its own `created_at + ttl_seconds`** — the author's clock,
+not the reader's. Every reader therefore agrees on the moment it lapses, and an
+agent whose clock is skewed looks stale to everybody rather than fresh to some.
+The alternative, measuring from arrival, makes liveness a different fact for
+each reader and hides skew instead of bounding it.
+
+**Absence means nothing.** These events are ephemeral, so relays store none of
+them and a client that connected a moment ago knows only about agents that have
+beaten since. An empty set means "nobody has said", never "nobody is running".
+Implementations MUST NOT present it as the latter, and MUST NOT condition any
+action on it: an agent missing from the list may be halfway through the work
+somebody is about to start again.
+
+Readers resolve two beats from one pubkey sharing a `created_at` by **arrival
+order**, not by the `(created_at, id)` tiebreak used elsewhere in this document.
+An agent that finishes a job inside one second publishes `busy` and then
+`online` in the same second, and a hash tiebreak strands it on the wrong status
+until the next beat. The rule differs here because a heartbeat is only ever read
+as the live stream the reader is watching, where arrival order is available and
+meaningful, while a projection or a chain is folded from stored history that no
+two readers receive identically. Nothing is ever authorised on a heartbeat,
+which is what makes a reader-local rule acceptable at all.
+
 ## Ordering
 
 Nostr has no total order. `created_at` is a client-supplied wall clock, and a

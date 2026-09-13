@@ -26,10 +26,12 @@
 
 import {
   Kinds,
+  TagName,
   addressees as addresseesOf,
   digest,
   isEphemeral,
   refTo,
+  tagValue,
   threadRef,
   type EventRef,
   type Filter,
@@ -41,6 +43,7 @@ import { RelayClient, type Logger, type Subscription } from './client.ts'
 import { Counters } from './counter.ts'
 import { LeaseManager, type Lease, type LeaseOptions } from './lease.ts'
 import { createOnce, incompleteEffects, type Once } from './once.ts'
+import { PresenceReporter, type PresenceOptions } from './presence.ts'
 import { Publisher, type PublishOptions } from './publish.ts'
 import { Cursor, type Gap } from './replay.ts'
 import { MemoryStore, type Store } from './store.ts'
@@ -65,6 +68,13 @@ export interface AgentOptions {
   /** Kinds to subscribe to. Defaults to {@link WORK_KINDS}. */
   kinds?: readonly number[]
   leases?: LeaseOptions | false
+  /**
+   * Heartbeats, so a human can tell "the agent ignored me" from "nothing is
+   * running". On by default, because an agent that has to be configured to be
+   * visible is an agent that is invisible in every deployment nobody thought
+   * about. `false` turns it off. See `presence.ts`.
+   */
+  presence?: PresenceOptions | false
   /** Deliver the agent's own events to handlers. Off: that is how loops start. */
   includeOwn?: boolean
   log?: Logger
@@ -140,6 +150,7 @@ export class Agent {
   private counters!: Counters
   private publisher!: Publisher
   private leases: LeaseManager | undefined
+  private presence: PresenceReporter | undefined
   private subscription: Subscription | undefined
   private draining = false
   private backfilling = false
@@ -227,12 +238,22 @@ export class Agent {
       await this.leases.start()
     }
 
+    if (this.options.presence !== false) {
+      this.presence = new PresenceReporter(this.publisher, this.options.presence ?? {})
+      await this.presence.start()
+    }
+
     await this.subscribe()
   }
 
   async stop(): Promise<void> {
     this.running = false
     this.leases?.stop()
+    // Before the socket goes: an `offline` published after `close()` is an
+    // exception in a shutdown path, and the TTL already covers the case where
+    // we never got to say it.
+    await this.presence?.stop()
+    this.presence = undefined
     this.subscription?.close()
     this.subscription = undefined
     await this.cursor?.save()
@@ -392,6 +413,11 @@ export class Agent {
         this.cursor.begin(event)
         await this.cursor.save()
 
+        // The caption comes from the triggering event's `alt`, which is the one
+        // line every Quorum kind is required to carry — so "what is it doing"
+        // works for a kind this SDK has never heard of.
+        this.presence?.set('busy', altOf(event))
+
         const handlers = [...this.any, ...(isForMe(event, this.pubkey) ? this.addressed : [])]
         await this.run(handlers, event)
 
@@ -409,6 +435,9 @@ export class Agent {
         this.cursor.complete(event)
         await this.cursor.save()
       }
+      // Idle again — announced once per burst, not once per event. On the
+      // shutdown path `stop()` is publishing `offline` instead.
+      if (this.running) this.presence?.set('online')
     } finally {
       this.draining = false
     }
@@ -507,6 +536,10 @@ export class Agent {
       gaps: () => this.cursor.gaps(),
     }
   }
+}
+
+function altOf(event: NostrEvent): string {
+  return tagValue(event.tags, TagName.Alt) ?? `a kind ${event.kind} event`
 }
 
 function numericTag(event: NostrEvent, name: string): number | undefined {

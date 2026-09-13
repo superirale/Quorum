@@ -91,6 +91,8 @@ with an interest in the answer. The resource re-derives it: see `examples/deploy
 | `grants.ts` | Issue, revoke and fetch 38102s, and `authorize()`: may this pubkey do this, offline, from signed events alone. `effectiveAddressable()` is the replacement rule, and is not `latestAddressable()`. |
 | `delegation.ts` | `intersect()` — the whole on-behalf-of idea in one function. The property worth asserting is not that it returns the right answer for a given pair, but that its output is never wider than either input. |
 | `audit.ts` | `verifyActionChain()`: hand it a pile of events and it tells you who approved what and whether the log is self-consistent. No relay, no server, no trust in whoever handed them over. |
+| `threads.ts` | The task list. `threadOp()` asks for a state change; `threads()` reads the answer and replays the ops the relay says it folded rather than believing the 38101 it signed. |
+| `presence.ts` | `PresenceReporter` beats kind 28103 while an agent runs; `presence()` reads the beats. Ephemeral, so an empty result means "nobody has said", never "nobody is running". |
 
 ## Two design notes that cost something to learn
 
@@ -121,10 +123,25 @@ relay that will happily store it. A chain is invalid only when the party doing t
 something illegitimate, which is the rule `tallyApprovals` already applied to responses from
 people nobody asked.
 
+**`close()` is final.** A closed `RelayClient` throws from `connect()` rather than quietly
+reopening. It used to reset the flag, and the effect was that `close()` did not reliably stop
+anything: a handler awaiting a human reaches `query()` or `subscribe()` some milliseconds after
+shutdown, the socket comes back up under a stopped agent, and the agent acts on an approval —
+the exact event its replacement is about to replay and perform again. Construct a new client to
+reconnect.
+
+**A heartbeat is read in arrival order and an action chain is not.** `presence()` settles two
+beats sharing a second on which arrived first, the opposite of everything else here, because an
+agent that finishes a job inside one second publishes `busy` and then `online` with the same
+`created_at` and the lowest-id tiebreak would strand it on the wrong badge. A projection is
+folded from stored history nobody can replay identically; a heartbeat is only ever read as the
+live stream the reader is watching. Nothing is ever authorised on one, which is the only reason
+that trade is available.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 115 tests
+pnpm --filter @quorum/sdk test        # 179 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

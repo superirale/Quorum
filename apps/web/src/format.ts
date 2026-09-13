@@ -20,6 +20,37 @@ export function when(seconds: number): string {
   return new Date(seconds * 1000).toLocaleTimeString()
 }
 
+/**
+ * How long ago, in the coarsest unit that is still true.
+ *
+ * Both arguments are seconds from the events themselves, so this says the same
+ * thing in every client reading the same channel — and it can go negative, when
+ * an author's clock is ahead of ours. "just now" rather than "in 4 seconds":
+ * a clock skew is not a fact about the work.
+ */
+export function ago(seconds: number, now: number): string {
+  const d = Math.max(0, now - seconds)
+  return d < 45 ? 'just now' : `${span(d)} ago`
+}
+
+/**
+ * The same thing, in whichever direction the moment lies.
+ *
+ * Deadlines need both: a grant's `expires_at` is in the future until the second
+ * it is not, and the row must go on saying something true across that boundary
+ * without the caller checking which side it is on.
+ */
+export function until(seconds: number, now: number): string {
+  return seconds <= now ? ago(seconds, now) : `in ${span(seconds - now)}`
+}
+
+function span(d: number): string {
+  if (d < 90) return `${Math.max(1, Math.round(d))}s`
+  if (d < 3600) return `${Math.round(d / 60)}m`
+  if (d < 86_400) return `${Math.round(d / 3600)}h`
+  return `${Math.round(d / 86_400)}d`
+}
+
 export function describe(event: NostrEvent): string {
   const alt = tagValue(event.tags, TagName.Alt)
   if (alt) return alt

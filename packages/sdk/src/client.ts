@@ -157,8 +157,26 @@ export class RelayClient {
 
   // --- lifecycle ------------------------------------------------------------
 
+  /**
+   * Open the socket, or return once it is open.
+   *
+   * {@link close} is final: a closed client throws here rather than quietly
+   * reopening. It used to reset the flag instead, and the effect was that
+   * `close()` did not reliably stop anything — a handler awaiting a human
+   * reaches `query()` or `subscribe()` some milliseconds later, those call
+   * `connect()`, and the socket comes back up under an agent that has been shut
+   * down. The agent then goes on to act on an approval that arrived after it
+   * was stopped, which is precisely the event its replacement is about to
+   * replay and perform again.
+   *
+   * Found by widening the window: adding a `await` to `Agent.stop()` (the
+   * `offline` heartbeat) turned a race that had always been there into a
+   * deterministic failure of the M0 restart test.
+   */
   async connect(): Promise<void> {
-    this.closed = false
+    if (this.closed) {
+      throw new Error(`the client for ${this.url} has been closed; construct a new one to reconnect`)
+    }
     if (this.connected) return
     this.opening ??= this.open().finally(() => {
       this.opening = undefined

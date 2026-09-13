@@ -68,12 +68,17 @@ grant, posts the request, and signs or refuses what comes back — the same loop
 driven by hand. It is also the headless path after M5, since nobody scripts a workspace from a
 web UI.
 
-**M5 started** — the reference client ([`apps/web`](apps/web)), sliced to the screen that
-matters: the approvals queue. An agent's proposal arrives as a card showing the payload field
-by field; you can change a value before you agree, and what gets signed is a digest of exactly
-what is on screen. Action chains are verified in the browser from the signatures, by the same
-function the offline auditor runs. Still to come: the thread list with task status, agent
-presence, and a grant inspector.
+**M5** — the reference client ([`apps/web`](apps/web)), and the whole loop is now watchable in
+a browser. An agent's proposal arrives as a card showing the payload field by field; you can
+change a value before you agree, and what gets signed is a digest of exactly what is on screen.
+Beside it: the tasks in the workspace, one task's whole history in order, who is beating right
+now, and every capability anyone holds — membership included.
+
+Two of those screens check the server rather than reading it. Action chains are verified in the
+browser from the signatures, by the same function the offline auditor runs. And the task list
+replays the thread ops the relay says it folded, in the order it says it folded them, and
+compares the result with the state the relay signed — so "the relay is lying about this task"
+is a badge on the screen rather than a possibility nobody can test.
 
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
@@ -86,7 +91,7 @@ pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the 
 
 pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
 
-pnpm check                                   # 253 tests: protocol 49, test-kit 17, sdk 141, console 34, web 12
+pnpm check                                   # 298 tests: protocol 49, test-kit 17, sdk 179, console 34, web 19
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket

@@ -9,14 +9,22 @@
  *
  * The candidate list is just the authors already in the channel, which is all a
  * client can honestly know without a directory. Pasting a hex pubkey works too.
+ *
+ * With a `thread`, this posts a NIP-22 comment into it instead of starting a
+ * new task. That distinction is the whole of "a thread is a task, not a
+ * conversation": every top-level message here opens a unit of work with its own
+ * status, assignee and budget, so a client that quietly made everything a reply
+ * — or everything a new task — would be lying about what the workspace
+ * contains.
  */
 
 import { useMemo, useState } from 'react'
 import { Kinds, type NostrEvent } from '@quorum/protocol'
+import type { Thread } from '@quorum/sdk'
 import { short } from '../format.ts'
 import type { Workspace } from '../useWorkspace.ts'
 
-export function Composer({ workspace }: { workspace: Workspace }) {
+export function Composer({ workspace, thread }: { workspace: Workspace; thread?: Thread }) {
   const [text, setText] = useState('')
   const [to, setTo] = useState('')
   const [busy, setBusy] = useState(false)
@@ -30,12 +38,22 @@ export function Composer({ workspace }: { workspace: Workspace }) {
     setBusy(true)
     setProblem(undefined)
     try {
-      await workspace.publish({
-        kind: Kinds.Thread,
-        text: text.trim(),
-        to: to ? [to] : [],
-        tags: [['title', text.trim().slice(0, 60)]],
-      })
+      const root = thread?.root
+      await workspace.publish(
+        root
+          ? {
+              kind: Kinds.Comment,
+              text: text.trim(),
+              to: to ? [to] : [],
+              thread: { id: root.id, kind: root.kind, pubkey: root.pubkey },
+            }
+          : {
+              kind: Kinds.Thread,
+              text: text.trim(),
+              to: to ? [to] : [],
+              tags: [['title', text.trim().slice(0, 60)]],
+            },
+      )
       setText('')
     } catch (error) {
       setProblem((error as Error).message)
@@ -49,7 +67,7 @@ export function Composer({ workspace }: { workspace: Workspace }) {
       <div className="row">
         <input
           value={text}
-          placeholder="say something"
+          placeholder={thread ? 'reply in this task' : 'start a task'}
           onChange={(e) => setText(e.target.value)}
         />
         <input

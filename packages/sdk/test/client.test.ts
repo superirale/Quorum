@@ -222,6 +222,30 @@ describe('subscribe', () => {
   })
 })
 
+describe('close()', () => {
+  it('is final — nothing reopens a client that was shut down', async (t) => {
+    // The obvious `connect()` clears the closed flag, and the effect is that
+    // `close()` stops nothing: a handler parked on a human reaches its next
+    // `query()` a few milliseconds after shutdown, the socket comes back up
+    // under an agent that no longer exists, and it acts on an approval that its
+    // replacement is about to replay and act on again. Reconnecting is what
+    // `reconnect` is for; resurrection is not the same thing.
+    const { relay, client, signer } = await connected(t)
+    const event = await chat(signer, 'after close')
+    client.close()
+
+    await assert.rejects(() => client.connect(), /has been closed/)
+    await assert.rejects(() => client.publish(event), /has been closed/)
+    await assert.rejects(() => client.query([{ '#h': [GROUP] }]), /has been closed/)
+
+    const reasons: string[] = []
+    client.subscribe([{ '#h': [GROUP] }], { onEvent: () => {}, onClosed: (r) => reasons.push(r) })
+    await waitFor(() => reasons.length === 1, { describe: 'the refusal to resubscribe' })
+    assert.match(reasons[0]!, /has been closed/)
+    assert.deepEqual(relay.received, [], 'and nothing reached the relay')
+  })
+})
+
 describe('trusting the relay', () => {
   it('drops an event whose signature does not check out', async (t) => {
     const { relay, client, signer } = await connected(t)

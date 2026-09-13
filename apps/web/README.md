@@ -8,8 +8,10 @@ signature covers a digest of the exact payload, so "you approved this deploy" ca
 made to mean a different deploy — not by the agent, not by the relay, and not by whoever runs
 either.
 
-This is a slice of M5, not all of it. There is no thread list, no task board, no grant
-inspector and no presence. What is here is the screen the whole project is an argument for.
+Around it: the tasks in the workspace with the relay's projection of each one checked rather
+than believed, one task's whole history in order, who is beating right now, and every
+capability anyone holds. The loop is watchable end to end — an agent picks up a task, hits a
+gate, a human approves inline, the agent finishes, and the task goes `done`.
 
 > **This page keeps your secret key in `localStorage`, unencrypted.** Any script on this
 > origin can read it, and so can anyone with a minute at your unlocked machine. That is worse
@@ -87,6 +89,50 @@ bytes, a different digest, and an action that fails validation *after* a human s
 The digest under the buttons is recomputed on every keystroke, so it is always the digest of
 what is on screen. You must never be able to see one payload and sign another.
 
+**Tasks** — every thread as a unit of work, with its status, assignee and last activity. The
+badge beside each one is the part worth explaining, because it is a security claim rather than
+a decoration. Kind 38101 is signed by the relay, and the relay is the one party with both the
+motive and the position to misstate what a task says; `folded_from` lists the op ids it folded
+*in the order it folded them*, so `threads()` replays those ops here and compares. `checked`
+means this browser recomputed the status from signed ops and got the same answer. `disagrees`
+has no innocent explanation, and what is displayed is then our fold rather than the relay's.
+`unverified` means the relay folded ops outside our backfill window, which is ordinary.
+`local` means no projection at all — the generic-relay case, which is supposed to work.
+
+Nothing had ever read `folded_from` before this screen, and nothing in TypeScript had ever
+*published* an op for it to fold.
+
+**One task** — its state, its actions, and its whole timeline oldest-first. The status and
+assignee controls publish kind 8109 ops, which are requests rather than writes: the reference
+relay folds them into the 38101 it signs, a generic relay folds nothing and every reader folds
+them locally, and both arrive at the same answer. `set_budget` is deliberately not offered — a
+spending ceiling is authority rather than coordination, the relay gates it on a
+`thread:budget` grant, and a control most members' requests would be refused for is worse than
+no control.
+
+The controls do not move until the op comes back through the subscription. An optimistic
+select would show `done` for a request the relay rejected.
+
+**Agents** — presence, in the header. Kind 28103 is ephemeral: relays store nothing, so this
+only ever shows agents that have beaten since you connected. **An empty row means nobody has
+*said* anything. It never means nobody is running**, and an agent absent from it may be midway
+through a production deploy. The lease (28102) is what stops two agents working one thread;
+this is a status light. A beat expires at its own `created_at + ttl_seconds` — the author's
+clock, so every reader agrees on the moment and a skewed agent looks stale to everybody rather
+than fresh to some. That is only acceptable because nothing is ever authorised on a heartbeat.
+
+**Capabilities** — every current grant and delegation, with membership first. `group:join` is
+the coarsest capability in the system and was the only one nobody had to be granted until M4's
+gap was closed, so burying it among the `action:deploy` rows would hide the answer to "who is
+in this workspace". Revoked and expired rows stay on screen: "this was revoked" and "this was
+never issued" are different facts, and an operator who cannot tell them apart re-issues
+capabilities somebody took away on purpose. `max_uses` is labelled *not enforced*, because
+nothing counts uses — there is no caller to ask.
+
+Read the scope column, not the resource name. Authority is `action:deploy` with
+`{env: production}`, never a resource called `action:deploy.production`: names match exactly
+and never narrow, scopes intersect, and a delegation can only ever cut one down.
+
 **Actions** — every action chain, verified in the browser by `verifyActionChains`, the same
 function the offline auditor runs over a JSON dump with no relay and no network. The relay
 served these bytes and is the one party with both the motive and the position to substitute an
@@ -100,9 +146,14 @@ never heard of kind 8106 still produces a usable line; the way to know that hold
 on it rather than keep a fallback nobody exercises. When a new kind lands, this feed renders it
 on the day it is invented.
 
-**Composer** — a kind 11 with a `to`-marked `p` tag. Unaddressed, the warning stays up: `to` is
-the only addressing signal there is, and an agent that acted on prose naming it would be the
-exact failure this project exists to avoid.
+**Composer** — a kind 11 with a `to`-marked `p` tag, or a NIP-22 kind 1111 comment when a task
+is open. Unaddressed, the warning stays up: `to` is the only addressing signal there is, and an
+agent that acted on prose naming it would be the exact failure this project exists to avoid.
+
+That a top-level message opens a *task* and not a conversation is the whole of "a thread is a
+unit of work". Every one gets its own status, assignee and budget, so a client that quietly
+made everything a reply — or everything a new task — would be lying about what the workspace
+contains.
 
 ## Notes for the next person
 
@@ -120,6 +171,19 @@ in one browser profile sharing a sequence produces the same symptom from the oth
 nothing to say look identical unless you read CLOSED. "Nothing is waiting on you" and "you are
 not subscribed to anything" must never render the same.
 
+**The event list is in arrival order, and something depends on that.** Everything else is
+derived from it by sorting, so arrival order looks like an implementation detail — but
+`presence()` settles two heartbeats sharing a second on which arrived first, deliberately the
+opposite call from `threads()`. An agent that finishes a job inside one second publishes `busy`
+and then `online` with the same `created_at`, and NIP-01's lowest-id tiebreak would leave it
+stuck on the wrong badge until the next beat. A projection is folded from stored history nobody
+can replay identically; a heartbeat is only ever read as the live stream the reader is watching.
+
+**The relay's 38101 carries `d`, `h` and `alt`, and no `E` tag.** So a thread-scoped
+`{"#E": [id]}` query returns every op and none of the projections, and `threads()` would report
+`local` against a relay that had in fact folded and signed the lot. This client subscribes to
+the whole channel, which is why it does not notice; anything narrowing its filters has to.
+
 ## Tests
 
 ```bash
@@ -129,5 +193,12 @@ pnpm --filter @quorum/web build       # proves the SDK bundles for a browser
 ```
 
 There is no DOM test runner here yet. The logic worth asserting on — type-preserving field
-edits, and finding the proposal behind a request — is in plain modules that Node can run, and
-the rest is markup best checked by clicking it.
+edits, finding the proposal behind a request, and saying when something happened — is in plain
+modules that Node can run, and the rest is markup best checked by clicking it. Everything the
+components *decide* lives in the SDK (`inbox`, `threads`, `presence`, `summariseGrants`,
+`verifyActionChains`, `conclusion`) and is tested there, which is also why the console agrees
+with this client rather than merely resembling it.
+
+The loop these screens show is tested end to end in another language:
+`pnpm --filter @quorum/deploy-agent live` runs it over a socket against the Go relay, including
+the thread ops this client publishes and the projection it checks them against.

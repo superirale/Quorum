@@ -9,8 +9,14 @@
  * loses nothing that matters.
  */
 
-import { CapabilityGrantBody, DelegationBody, Kinds, type NostrEvent } from '@quorum/protocol'
-import { Grants, effectiveAddressable, grantId } from '@quorum/sdk'
+import { Kinds, type NostrEvent } from '@quorum/protocol'
+import {
+  Grants,
+  effectiveAddressable,
+  grantId,
+  summariseGrant,
+  type GrantState,
+} from '@quorum/sdk'
 import { flag, flagAll, int, pairs, type ParsedArgs } from '../args.ts'
 import { bold, dim, green, red, short, yellow } from '../format.ts'
 import { open, resolvePubkey } from '../session.ts'
@@ -125,76 +131,55 @@ function idOf(event: NostrEvent): string | undefined {
 /**
  * One line describing what a 38102 or 38106 actually says.
  *
- * Read through the body schemas rather than by reaching into the JSON, because
- * the first version of this did the latter — it looked for `body.resource` when
- * the spec lives one level down under `body.grant`, and printed a confident
- * `?` for every grant ever issued. A listing that cannot say what a capability
- * covers is worse than no listing: it invites an operator to conclude the grant
- * is malformed and re-issue it.
+ * The reading is `summariseGrant()` in the SDK and this is only the rendering,
+ * which is the split the audit-verdict bug argued for: the browser draws these
+ * as a table and the console as a line of ANSI, and a second parser would be a
+ * second opinion about what a grant covers. The first version of this function
+ * was that second opinion — it read `body.resource` where the spec nests it
+ * under `body.grant`, and printed a confident `?` for every grant ever issued.
  *
- * Expiry is marked here even though `effectiveAddressable` does not filter on
- * it. An expired grant is still the newest event at its coordinate, so it is
- * still "current" in the replaceable-event sense while authorising nothing —
- * and `verifyGrant` will refuse it. The two must not read differently.
+ * Expiry is shown even though `effectiveAddressable` does not filter on it. An
+ * expired grant is still the newest event at its coordinate, so it is still
+ * "current" in the replaceable-event sense while authorising nothing — and
+ * `authorize` refuses it. A listing that disagreed with the verifier would be
+ * describing a capability that does not work.
  */
 export function describeGrant(event: NostrEvent, now = Math.floor(Date.now() / 1000)): string {
-  const parsed = parse(event.content)
-  if (parsed === undefined) {
-    return `${red('corrupt')} ${'?'.padEnd(10)} ${dim('body is not JSON')}`
+  const summary = summariseGrant(event, now)
+
+  if (summary.state === 'invalid') {
+    return summary.problem === 'unparseable'
+      ? `${red('corrupt')} ${'?'.padEnd(10)} ${dim('body is not JSON')}`
+      : `${red('invalid')} ${summary.kind.padEnd(10)} ${dim('body does not match the schema')}`
   }
 
-  if (event.kind === Kinds.Delegation) {
-    const body = DelegationBody.safeParse(parsed)
-    if (!body.success) return malformed('delegation')
-    const { resources, scope, expires_at, revoked } = body.data
-    return [
-      state(revoked, expires_at, now),
-      'delegation'.padEnd(10),
-      resources?.length ? resources.join(', ') : dim('anything the delegate already holds'),
-      scope ? dim(JSON.stringify(scope)) : '',
-      until(expires_at),
-    ]
-      .filter(Boolean)
-      .join(' ')
-  }
+  const resources =
+    summary.kind === 'delegation' && !summary.resources.length
+      ? dim('anything the delegate already holds')
+      : summary.resources.join(', ')
 
-  const body = CapabilityGrantBody.safeParse(parsed)
-  if (!body.success) return malformed('grant')
-  const { grant, revoked, via } = body.data
   return [
-    state(revoked, grant.expires_at, now),
-    'grant'.padEnd(10),
-    grant.resource,
-    dim(grant.actions.join(',')),
-    grant.scope ? dim(JSON.stringify(grant.scope)) : '',
-    grant.max_uses !== undefined ? dim(`max ${grant.max_uses} uses`) : '',
-    until(grant.expires_at),
+    state(summary.state),
+    summary.kind.padEnd(10),
+    resources,
+    summary.actions.length ? dim(summary.actions.join(',')) : '',
+    summary.scope ? dim(JSON.stringify(summary.scope)) : '',
+    summary.maxUses !== undefined ? dim(`max ${summary.maxUses} uses`) : '',
+    until(summary.expiresAt),
     // A grant issued under a delegation is only as wide as that delegation, and
-    // the reader cannot check that without knowing there was one.
-    via ? dim(`via ${via}`) : '',
+    // a reader cannot check that without knowing there was one.
+    summary.via ? dim(`via ${summary.via}`) : '',
   ]
     .filter(Boolean)
     .join(' ')
 }
 
-function state(revoked: boolean, expiresAt: number | undefined, now: number): string {
-  if (revoked) return red('revoked')
-  if (expiresAt !== undefined && expiresAt < now) return yellow('expired')
+function state(state: GrantState): string {
+  if (state === 'revoked') return red('revoked')
+  if (state === 'expired') return yellow('expired')
   return green('active ')
 }
 
 function until(expiresAt: number | undefined): string {
   return expiresAt === undefined ? '' : dim(`until ${new Date(expiresAt * 1000).toISOString()}`)
-}
-
-function malformed(kind: string): string {
-  return `${red('invalid')} ${kind.padEnd(10)} ${dim('body does not match the schema')}`
-}
-
-function parse(content: string): unknown {
-  try {
-    return JSON.parse(content)
-  } catch {
-    return undefined
-  }
 }

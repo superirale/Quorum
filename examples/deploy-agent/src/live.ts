@@ -42,6 +42,8 @@ import {
   Publisher,
   RelayClient,
   approvalResponse,
+  threadOp,
+  threads,
   verifyActionChain,
 } from '@quorum/sdk'
 import { createDeployAgent } from './agent.ts'
@@ -249,6 +251,51 @@ expect(
   chain.approvals.every((a) => a.pubkey !== mallory.publicKey),
   'mallory’s approval is not in the chain at all — the relay never stored it',
 )
+
+// --- the task the deploy was for ---------------------------------------------
+
+// The other cross-language seam, and until M5 nothing in TypeScript exercised
+// it: the relay has folded kind 8109 into a signed 38101 since M2, and every TS
+// client read that projection without ever producing an op for it. So the
+// projector was proved by Go tests building events by hand, and `threads()` by
+// TS tests building projections by hand, and nobody had put the two halves in
+// the same room.
+//
+// `check: 'agrees'` is the assertion that matters. It means this process
+// replayed the ops the relay says it folded, in the order the relay says it
+// folded them, and arrived at the state the relay signed — which is the only
+// reason a client is entitled to display a relay's projection at all.
+await publisher.publish(threadOp(refTo(thread), { op: 'assign', assignee: bot.publicKey }))
+await publisher.publish(threadOp(refTo(thread), { op: 'set_status', status: 'done' }))
+
+// An admin may set a budget; the relay checks that rather than taking the op's
+// word, and Ada is an admin because she created the group.
+await publisher.publish(threadOp(refTo(thread), { op: 'set_budget', budget: { usd: 5 } }))
+ok('the relay accepted three thread ops built by the SDK, including a budget from an admin')
+
+// And the negative control for the one op that is authority rather than
+// coordination. Mallory is an ordinary member holding no `thread:budget` grant.
+expect(
+  await refused(
+    malloryClient,
+    await malloryPublisher.sign(threadOp(refTo(thread), { op: 'set_budget', budget: { usd: 500 } })),
+    'thread:budget',
+  ),
+  'the relay refused a budget change from a member with no capability for it',
+)
+
+// The whole channel in one filter, which is what the reference client asks for
+// too — and it has to be. The relay's 38101 carries `d`, `h` and `alt` and no
+// `E` tag, so a thread-scoped `{"#E": [...]}` query returns every op and none of
+// the projections, and `threads()` would report `local` on a relay that had in
+// fact folded and signed the lot.
+const task = await waitForOne('the relay’s projection to agree with a replay of its own ops', async () => {
+  const [found] = threads(await adaClient.query([{ '#h': [group] }]))
+  return found?.check.verdict === 'agrees' && found.status === 'done' ? found : undefined
+})
+expect(task.assignee === bot.publicKey, 'the projection assigns the task to the bot')
+expect(task.budget?.usd === 5, `the budget folded through at $5 (got ${JSON.stringify(task.budget)})`)
+ok('the task reads `done`, and this process recomputed that from the ops the relay folded')
 
 await agent.stop()
 adaClient.close()

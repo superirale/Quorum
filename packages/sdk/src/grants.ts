@@ -361,6 +361,135 @@ function covers(spec: GrantSpec, request: AuthorizeRequest, now: number): string
   return undefined
 }
 
+// --- describing --------------------------------------------------------------
+
+/**
+ * What a grant is, without deciding how to say it.
+ *
+ * Here rather than in each client for the reason `conclusion()` is: the console
+ * prints these as a line of ANSI, the reference client draws them as a table,
+ * and the first version of the console's renderer read `body.resource` when the
+ * spec nests it under `body.grant` — so it printed a confident `?` for every
+ * grant ever issued. A listing that cannot say what a capability covers is
+ * worse than no listing, because it invites an operator to conclude the grant
+ * is broken and issue a second one.
+ *
+ * Parsing happens once, through the body schemas, and both clients render the
+ * result. Neither gets to hold its own opinion about what a grant says.
+ */
+export type GrantState = 'active' | 'revoked' | 'expired' | 'invalid'
+
+export interface GrantSummary {
+  event: NostrEvent
+  kind: 'grant' | 'delegation'
+  state: GrantState
+  /**
+   * Set when `state` is `invalid`, and worth telling apart. `unparseable` is
+   * somebody publishing junk at a capability coordinate, which any member can
+   * do and every relay will store; `malformed` is JSON that tried to be a grant
+   * and is not, which is far more likely to be a client of ours with a bug.
+   */
+  problem?: 'unparseable' | 'malformed'
+  /** Who signed it. Whether they are *trusted* is the resource's question. */
+  issuer: string
+  /** The principal it names: the grantee of a grant, the delegate of a delegation. */
+  subject?: string
+  /** Grants name exactly one resource; a delegation may name several, or none. */
+  resources: string[]
+  actions: string[]
+  scope?: Record<string, unknown>
+  maxUses?: number
+  expiresAt?: number
+  /** The delegation this was issued under, if any. It bounds the grant. */
+  via?: string
+  revokedReason?: string
+}
+
+/**
+ * Read one 38102 or 38106.
+ *
+ * Expiry is reported even though {@link effectiveAddressable} does not filter
+ * on it: an expired grant is still the newest event at its coordinate, so it is
+ * still "current" in the replaceable-event sense while authorising nothing.
+ * {@link authorize} refuses it, and a listing that called it active would be
+ * describing a capability the resource will not honour.
+ */
+export function summariseGrant(
+  event: NostrEvent,
+  now = Math.floor(Date.now() / 1000),
+): GrantSummary {
+  const base = { event, issuer: event.pubkey, resources: [], actions: [] }
+  const kind = event.kind === Kinds.Delegation ? 'delegation' : 'grant'
+
+  if (!isJson(event.content)) return { ...base, kind, state: 'invalid', problem: 'unparseable' }
+
+  if (event.kind === Kinds.Delegation) {
+    const body = parse(DelegationBody, event)
+    if (!body) return { ...base, kind: 'delegation', state: 'invalid', problem: 'malformed' }
+    return {
+      ...base,
+      kind: 'delegation',
+      state: stateOf(body.revoked, body.expires_at, now),
+      subject: body.delegate,
+      resources: body.resources ?? [],
+      ...(body.scope ? { scope: body.scope } : {}),
+      ...(body.expires_at !== undefined ? { expiresAt: body.expires_at } : {}),
+    }
+  }
+
+  const body = parse(CapabilityGrantBody, event)
+  if (!body) return { ...base, kind: 'grant', state: 'invalid', problem: 'malformed' }
+
+  return {
+    ...base,
+    kind: 'grant',
+    state: stateOf(body.revoked, body.grant.expires_at, now),
+    subject: body.grantee,
+    resources: [body.grant.resource],
+    actions: body.grant.actions,
+    ...(body.grant.scope ? { scope: body.grant.scope } : {}),
+    ...(body.grant.max_uses !== undefined ? { maxUses: body.grant.max_uses } : {}),
+    ...(body.grant.expires_at !== undefined ? { expiresAt: body.grant.expires_at } : {}),
+    ...(body.via ? { via: body.via } : {}),
+    ...(body.revoked_reason ? { revokedReason: body.revoked_reason } : {}),
+  }
+}
+
+/**
+ * Every capability in a bag of events, current versions only.
+ *
+ * `effectiveAddressable`, not `latestAddressable`: between a grant and a
+ * revocation of the same coordinate published in the same second, the
+ * revocation wins. A listing that showed the other one would be telling an
+ * operator that a capability they withdrew is still in force.
+ *
+ * Sorted by subject then resource so that two readings of the same workspace
+ * produce the same order, which is what makes a diff between them mean
+ * something.
+ */
+export function summariseGrants(
+  events: readonly NostrEvent[],
+  now = Math.floor(Date.now() / 1000),
+): GrantSummary[] {
+  const capabilities = events.filter(
+    (e) => e.kind === Kinds.CapabilityGrant || e.kind === Kinds.Delegation,
+  )
+  return effectiveAddressable(capabilities)
+    .map((event) => summariseGrant(event, now))
+    .sort(
+      (a, b) =>
+        (a.subject ?? '').localeCompare(b.subject ?? '') ||
+        (a.resources[0] ?? '').localeCompare(b.resources[0] ?? '') ||
+        a.event.id.localeCompare(b.event.id),
+    )
+}
+
+function stateOf(revoked: boolean, expiresAt: number | undefined, now: number): GrantState {
+  if (revoked) return 'revoked'
+  if (expiresAt !== undefined && expiresAt < now) return 'expired'
+  return 'active'
+}
+
 // --- the connected side ------------------------------------------------------
 
 export interface GrantsDeps {
@@ -444,4 +573,13 @@ function short(hex: string): string {
 
 function json(value: unknown): string {
   return JSON.stringify(value)
+}
+
+function isJson(content: string): boolean {
+  try {
+    JSON.parse(content)
+    return true
+  } catch {
+    return false
+  }
 }

@@ -23,10 +23,16 @@ import {
   channelFilter,
   controlFilter,
   inbox,
+  presence,
+  summariseGrants,
+  threads,
   verifyActionChains,
   type ActionChain,
+  type GrantSummary,
   type Pending,
+  type Presence,
   type PublishOptions,
+  type Thread,
 } from '@quorum/sdk'
 import type { Identity } from './identity.ts'
 import { LocalStore } from './store.ts'
@@ -36,9 +42,16 @@ export type Status = 'connecting' | 'live' | 'closed' | 'error'
 export interface Workspace {
   status: Status
   problem?: string
+  /** Every event served, in arrival order. `presence()` depends on that. */
   events: NostrEvent[]
   pending: Pending[]
   chains: ActionChain[]
+  /** Threads as tasks: status, assignee, and the relay's projection checked. */
+  threads: Thread[]
+  /** Who is beating right now. Empty means "nobody has said", not "nobody is up". */
+  agents: Presence[]
+  /** Every current capability in the workspace. */
+  grants: GrantSummary[]
   /** Everything, newest first, for the feed. */
   feed: NostrEvent[]
   publish(options: PublishOptions): Promise<NostrEvent>
@@ -138,5 +151,17 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
     [events],
   )
 
-  return { status, problem, events, pending, chains, feed, publish, now }
+  // The relay signs a 38101 for every thread, and `threads()` replays the ops
+  // it says it folded rather than believing the result. See `threads.ts`: this
+  // is the first consumer `folded_from` has ever had.
+  const tasks = useMemo(() => threads(events), [events])
+
+  // `events` and not `feed`, deliberately. Two heartbeats can share a second —
+  // an agent that finishes a job quickly publishes `busy` and `online` in one —
+  // and only arrival order tells them apart.
+  const agents = useMemo(() => presence(events, now), [events, now])
+
+  const grants = useMemo(() => summariseGrants(events, now), [events, now])
+
+  return { status, problem, events, pending, chains, threads: tasks, agents, grants, feed, publish, now }
 }
