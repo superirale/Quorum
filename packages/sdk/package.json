@@ -23,7 +23,9 @@
     "pretypecheck": "pnpm --filter @quorum/protocol --filter @quorum/test-kit build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "pretest": "pnpm --filter @quorum/protocol --filter @quorum/test-kit build",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "prefixtures": "pnpm --filter @quorum/protocol build",
+    "fixtures": "node --experimental-strip-types scripts/gen-context-fixture.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.9.1",

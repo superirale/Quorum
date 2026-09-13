@@ -174,6 +174,61 @@ same logic, reaching the same state from the same ops.
 rewritten on every change, and a thread worked on for months would otherwise
 grow an unbounded tag list; the dropped ids are still fetchable by thread.
 
+## Context packing
+
+A NIP-90 DVM (`internal/contextpack`): kind 5600 in, kind 6600 out, addressed by
+pubkey. The relay's own key is the packer's key, and clients find it in the
+**NIP-11 document** — `khatru29.Init` puts it there, so no configuration is
+needed to discover it. A 5600 that names somebody else goes unanswered, which is
+the whole reason it is addressed rather than being an endpoint: a workspace may
+hold several packers, they are allowed to give different answers, and a
+requester must be able to say whose answer it got.
+
+The algorithm is `extractive-v1`, specified in the `Context` section of the NIP
+and implemented twice — here in Go and in `packages/sdk/src/context.ts`. The two
+must be **byte-identical over the same events**, because on `nip44` channels the
+relay cannot read the content and the SDK becomes the only packer. That makes
+this an optimisation rather than a dependency, and only if the bytes agree.
+
+Three things hold that:
+
+- `internal/contextpack/pack_test.go` runs the golden fixture the SDK generates.
+- The SDK's own suite runs the same file.
+- `pnpm --filter @quorum/claude-agent live` compares a real 6600 against a local
+  `packContext` over a real thread. The fixture is the *input* to the pure
+  function, so it cannot notice the two implementations gathering different
+  events; that last one can, and is the only test that does.
+
+**`gather` is four filters, not one.** The root by id — it carries no `E` tag,
+it *is* the root — the thread by `E`, the relay's 38101 by `d`, and the
+workspace's kind 38103 agent manifests. The manifests are not about the thread
+at all and are the easiest of the four to drop: provenance is derived from the
+event set and nothing else, so without them every agent is labelled `human`,
+`untrusted` collapses into `member`, and a caller stops fencing another agent's
+output before a model reads it. The group is re-checked on every event on the
+way in, because an id lookup cannot carry an `h` and because a `#h` query is only
+as good as the tag — otherwise a member of one channel could publish a 1111
+`E`-tagged at another channel's thread and have it packed into context there.
+
+**A pack that will not fit is refused, not trimmed.** An event here holds 65,535
+bytes; a large budget over a long thread wants more. The relay replies with a
+kind 7000 naming both numbers and suggesting a smaller `budget_tokens`. Quietly
+dropping segments would produce a different answer from the SDK's under the same
+`algorithm`, with nothing in the body saying so — which is exactly the failure
+the dual implementation exists to make impossible.
+
+**`MaxLimit` is raised to 5000 deliberately.** eventstore defaults it to 1000 and
+serves a filter asking for *more* than the maximum by falling back to
+`MaxLimit/4` — so the packer's `Limit: 5000` would have fetched 250 events and a
+500-message thread would have been packed from its last half with nothing
+anywhere saying so. A client's unlimited backfill still gets a quarter of it,
+which is the other half of why it is raised rather than the packer's bound
+lowered.
+
+**Building a long thread needs `QUORUM_EVENTS_PER_MINUTE=0`.** The default 120 a
+minute is right for a workspace and wrong for a test fixture publishing five
+hundred messages from one address.
+
 ## Notes for the SDK (M3)
 
 **A filter scoped only by `#p` is rejected.** relay29's

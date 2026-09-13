@@ -31,6 +31,7 @@ import (
 	"github.com/nbd-wtf/go-nostr/nip29"
 
 	"github.com/quorum-chat/quorum/apps/relay/internal/config"
+	"github.com/quorum-chat/quorum/apps/relay/internal/contextpack"
 	"github.com/quorum-chat/quorum/apps/relay/internal/policy"
 	"github.com/quorum-chat/quorum/apps/relay/internal/protocol"
 	"github.com/quorum-chat/quorum/apps/relay/internal/threads"
@@ -159,6 +160,16 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 
 	db := &badger.BadgerBackend{
 		Path: filepath.Join(cfg.DataDir, "events"),
+		// Pinned to the packer's own bound, and it has to be said out loud
+		// because the default silently truncates history. eventstore defaults
+		// MaxLimit to 1000 and serves a filter that asks for *more* than that
+		// by falling back to MaxLimit/4 — so the context packer's `Limit: 5000`
+		// would have fetched 250 events, and a 500-message thread would have
+		// been packed from its last half with nothing anywhere saying so. A
+		// client's unlimited backfill gets a quarter of this for the same
+		// reason, which is the other half of why it is raised rather than the
+		// packer's bound lowered.
+		MaxLimit: contextpack.MaxThreadEvents,
 		// Badger logs a table-size report at every level on open. Warnings and
 		// errors still come through; what is dropped is only the startup dump,
 		// which otherwise buries the relay's own first lines.
@@ -189,6 +200,17 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 	state.AllowAction = allowAction
 
 	projector, err := threads.New(index, db, relay, cfg.SecretKey)
+	if err != nil {
+		db.Close()
+		return nil, nil, nil, err
+	}
+
+	// The context packer. Note what is *not* here: kind 6600 is absent from
+	// relaySignedKinds, so anyone may publish one. That is deliberate — from M9
+	// the SDK-side packer answers encrypted channels under its own key, and a
+	// relay that reserved the result kind for itself would make the packer
+	// unswappable, which is the one property the DVM shape exists to keep.
+	packer, err := contextpack.NewPacker(index, db, relay, cfg.SecretKey)
 	if err != nil {
 		db.Close()
 		return nil, nil, nil, err
@@ -233,7 +255,7 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		relay.RejectFilter = append(relay.RejectFilter, policies.MustAuth)
 	}
 
-	relay.OnEventSaved = append(relay.OnEventSaved, projector.Fold)
+	relay.OnEventSaved = append(relay.OnEventSaved, projector.Fold, packer.Answer)
 
 	return relay, index, func() { db.Close() }, nil
 }

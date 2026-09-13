@@ -93,8 +93,10 @@ with an interest in the answer. The resource re-derives it: see `examples/deploy
 | `audit.ts` | `verifyActionChain()`: hand it a pile of events and it tells you who approved what and whether the log is self-consistent. No relay, no server, no trust in whoever handed them over. |
 | `threads.ts` | The task list. `threadOp()` asks for a state change; `threads()` reads the answer and replays the ops the relay says it folded rather than believing the 38101 it signed. |
 | `presence.ts` | `PresenceReporter` beats kind 28103 while an agent runs; `presence()` reads the beats. Ephemeral, so an empty result means "nobody has said", never "nobody is running". |
+| `context.ts` | `packContext()` — the `extractive-v1` compactor, deterministic to the byte; `fetchContext()` asks a DVM for the same thing; `renderContext()` turns a pack into a prompt and fences what is not ours. `ctx.context()` picks between the two and the caller cannot tell which answered. |
+| `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 
-## Two design notes that cost something to learn
+## Design notes that cost something to learn
 
 **A relay filter is a coarse prefilter, not the answer.** `{"#p": [me]}` matches every `p` tag,
 including bare mentions and NIP-22 parent-author tags, because relays index only a tag's first
@@ -138,10 +140,29 @@ folded from stored history nobody can replay identically; a heartbeat is only ev
 live stream the reader is watching. Nothing is ever authorised on one, which is the only reason
 that trade is available.
 
+**The pack's ordering has one exception and it is the root.** Everything else is oldest-first
+within the admitted set; the kind 11 comes first regardless, and it is mandatory-keep rather
+than merely old. A packer that treated the oldest message as the least important one would drop
+the only statement of what the thread is *for* — which in a five-hundred-message thread is
+usually also the only place the answer is written down.
+
+**Provenance is derived from the event set and nothing else.** A kind 38103 manifest is the only
+evidence that a pubkey belongs to an agent, so an agent that never publishes one is labelled
+`human`/`member`, `renderContext` stops fencing its output, and its words reach the next model
+looking like a colleague's. No error, no warning. That is why `Agent.publish` exists at all —
+see below — and `examples/claude-agent/src/demo.ts` stages the failure on purpose.
+
+**`Agent.publish` exists so that nothing else needs a second `Publisher`.** An agent has things
+to say outside a handler: its manifest, a shift report, a note that it is going down. Building a
+`Publisher` over the same key for those allocates `counter` from a second copy of the ledger —
+`Counters` caches its last value in memory as well as in the `Store`, so the two diverge on the
+first write. A gap in a sequence says the agent crashed; a duplicate says the key is in two
+places at once, which is a much more alarming thing to make somebody investigate.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 179 tests
+pnpm --filter @quorum/sdk test        # 246 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

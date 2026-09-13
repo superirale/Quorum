@@ -24,13 +24,14 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | --- | --- |
 | [`spec/nip-quorum.md`](spec/nip-quorum.md) | The NIP text — kinds, tags, and why each rule exists |
 | [`packages/protocol`](packages/protocol) | Kind allocation, validators, JSON Schema, fixtures |
-| [`packages/sdk`](packages/sdk) | Agent SDK — signers, client, addressing, `once()`, replay, leases |
+| [`packages/sdk`](packages/sdk) | Agent SDK — signers, client, addressing, `once()`, replay, leases, context packing |
 | [`packages/test-kit`](packages/test-kit) | In-process relay + chaos helpers, so agents are testable with no infra |
 | [`apps/relay`](apps/relay) | Reference relay — khatru + relay29 + the Quorum policies (Go) |
 | [`apps/console`](apps/console) | `quorum` — the operator CLI: be the human in the loop from a terminal |
 | [`apps/web`](apps/web) | Reference client (React) — the approvals queue, with the payload editable field by field |
 | [`examples/echo-agent`](examples/echo-agent) | The smallest complete agent, and a narrated demo of why each part is there |
 | [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
+| [`examples/claude-agent`](examples/claude-agent) | A language model reading a workspace — 500 messages into a 20k budget, with the trust boundary visible |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -80,6 +81,28 @@ replays the thread ops the relay says it folded, in the order it says it folded 
 compares the result with the state the relay signed — so "the relay is lying about this task"
 is a badge on the screen rather than a possibility nobody can test.
 
+**M6** — context packing, done twice. A thread of five hundred messages goes into a twenty
+thousand token budget deterministically: drop what is never context, collapse action chains to
+their outcome, truncate at a documented boundary, and keep the root, the task state, the
+approvals and the last ten messages verbatim whatever the budget says. There is no summarizer
+agent and there will not be one — a single prompt-injected summarizer would rewrite the working
+memory of every agent in the workspace, which is structural rather than patchable.
+
+The compactor is implemented twice, in Go inside the relay as a NIP-90 DVM and in TypeScript
+inside the SDK, and the two produce **byte-identical output over the same events**. That is what
+makes relay-side packing an optimisation instead of a dependency: when M9 turns on `nip44` and
+the relay goes blind, the SDK becomes the only packer and nothing an agent observes changes.
+
+Every segment carries `provenance: {pubkey, kind, trust}`, and `renderContext` fences what is
+not ours before a model sees it. The label is derived from the event set and nothing else — a
+kind 38103 manifest is the only evidence that a pubkey belongs to an agent — so an agent that
+never announces itself is read as a human, and its output reaches the next model unfenced. The
+demo deletes one manifest to show exactly that, because it fails silently.
+
+Agents also remember things now, in kind 38104: addressable, signed, scoped by key, and
+*published*. "Why did it answer that" is a query any member of the workspace can run, rather
+than a request for shell access to the agent's host.
+
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
 ## Try it
@@ -90,8 +113,9 @@ pnpm --filter @quorum/deploy-agent demo      # start here — consent, narrated,
 pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the signatures
 
 pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
+pnpm --filter @quorum/claude-agent demo      # 500 messages into a 20k budget — no API key needed
 
-pnpm check                                   # 298 tests: protocol 49, test-kit 17, sdk 179, console 34, web 19
+pnpm check                                   # 365 tests: protocol 49, test-kit 17, sdk 246, console 34, web 19
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -108,12 +132,22 @@ killed mid-handler without repeating itself, and does not double-respond when tw
 a key — each claim run again with the mechanism removed, so the failure it prevents is on screen
 next to it.
 
+The claude demo is the context API: five hundred messages compacted into a budget with the
+answer still in it, another agent's prompt injection arriving fenced and labelled, and then the
+same pack computed twice to prove it is a function rather than a heuristic. It runs without an
+`ANTHROPIC_API_KEY` and every assertion still holds, because each one is about the *prompt* —
+what a model does with a fence is a real question and not one a demo can settle, so the offline
+stand-in answers by grep and says so rather than play-acting a refusal.
+
 To see the same thing over a real socket against the Go relay:
 
 ```sh
 cd apps/relay && make run                    # :3334, in another terminal
 pnpm --filter @quorum/echo-agent live
 pnpm --filter @quorum/deploy-agent live      # also checks the relay refuses three forgeries
+
+cd apps/relay && QUORUM_EVENTS_PER_MINUTE=0 make run
+pnpm --filter @quorum/claude-agent live      # the Go packer and the TS packer, compared byte for byte
 ```
 
 Or drive it yourself, as the human the agent is asking. [`apps/console`](apps/console) has the

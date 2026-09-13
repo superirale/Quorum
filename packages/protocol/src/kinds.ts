@@ -132,6 +132,13 @@ export const SUPPORTED_KINDS: readonly number[] = Object.freeze([
   BorrowedKinds.Thread,
   BorrowedKinds.Comment,
   BorrowedKinds.DeletionRequest,
+  // NIP-90's job feedback, which is how a packer refuses. Listed because a
+  // relay that would not carry it makes "the packer will not answer" and "the
+  // thread is empty" the same observation, and an agent that cannot tell those
+  // apart reasons happily from no history at all. The relay's own packer is
+  // not the only one: from M9 the SDK-side packer answers encrypted channels
+  // and publishes its refusals here like anyone else.
+  BorrowedKinds.JobFeedback,
   ...QUORUM_KINDS,
 ])
 

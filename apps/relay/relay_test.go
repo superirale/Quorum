@@ -45,6 +45,9 @@ func newActor(t *testing.T, name string) actor {
 type testRelay struct {
 	url  string
 	http string
+	// pubkey is the relay's own key: the author of the thread projection, of
+	// checkpoints, and the address a context request is sent to.
+	pubkey string
 }
 
 func start(t *testing.T, owners ...string) testRelay {
@@ -69,6 +72,11 @@ func start(t *testing.T, owners ...string) testRelay {
 		t.Fatalf("building the relay: %v", err)
 	}
 
+	pubkey, err := cfg.PublicKey()
+	if err != nil {
+		t.Fatalf("deriving the relay public key: %v", err)
+	}
+
 	server := httptest.NewServer(relay)
 	t.Cleanup(func() {
 		server.Close()
@@ -76,8 +84,9 @@ func start(t *testing.T, owners ...string) testRelay {
 	})
 
 	return testRelay{
-		url:  "ws" + strings.TrimPrefix(server.URL, "http"),
-		http: server.URL,
+		url:    "ws" + strings.TrimPrefix(server.URL, "http"),
+		http:   server.URL,
+		pubkey: pubkey,
 	}
 }
 

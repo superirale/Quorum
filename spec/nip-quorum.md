@@ -527,11 +527,6 @@ packer is addressed by pubkey and is swappable. Results carry per-segment
 Agents reading other agents' output is the normal case here, which makes this a
 protocol-level concern rather than an application one.
 
-Compaction MUST be deterministic and extractive: drop reactions and joins,
-collapse action-status transitions to their terminal state, truncate long bodies
-at a documented boundary, and keep the thread root, all approvals and all
-outcomes verbatim.
-
 **There is deliberately no designated summarizer agent.** If one agent produced
 the summaries fed to all the others, a single prompt injection against it would
 rewrite the working memory of the entire workspace — one malicious message
@@ -543,6 +538,176 @@ demand `verbatim_only` and pay the tokens instead.
 `budget_tokens` is **advisory**. The mandatory-keep set can exceed it. The result
 reports `used_tokens` so callers can react rather than receive a silently
 truncated history.
+
+### The packer runs in two places, so it is specified as a function
+
+On a `plaintext` channel a relay can pack context and one round trip replaces a
+backfill. On `nip44` or `mls` it cannot read a word, and the packer has to move
+into the client. So the same algorithm exists twice, in different languages, and
+the two MUST agree — otherwise "which packer answered" becomes a fact an agent's
+behaviour depends on, and a workspace that turns on encryption quietly changes
+what every agent knows.
+
+Agreement is only checkable if packing is a pure function, so `extractive-v1` is
+defined as one:
+
+```
+pack(request, requester, events) -> result
+```
+
+with no clock, no network, no relay state and no configuration. Two
+implementations given the same three inputs MUST produce byte-identical
+canonical JSON for the result body. Everything below exists to make that
+achievable rather than aspirational; where a rule looks arbitrary, it is usually
+the cheapest thing two languages can agree on exactly.
+
+`events` is whatever set the packer holds. A relay holds the group; a client
+holds its backfill window. Identical output is required *for the same input
+set*, and a packer that has seen fewer events MUST NOT be treated as wrong — it
+reports what it packed, and `dropped_events` is a count over its own input.
+
+### `extractive-v1`
+
+**1. Select.** An event belongs to thread `T` if its id is `T`, if its NIP-22
+`E` tag is `T`, or if it is a 38101 whose `d` is `T`. The thread state is
+included because "what am I supposed to be doing" is the question an agent asks
+first, and its answer is a projection rather than a message.
+
+**2. Apply the caller's filters**, in this order: `include_kinds` (if present,
+keep only these), `exclude_kinds`, `since` (drop events older than it). These
+win over the mandatory-keep rules below. Mandatory-keep protects history from
+*the budget*, never from an explicit instruction; a caller who excludes kind 11
+gets no thread root and has asked for that.
+
+**3. Drop what is never context**, whatever the caller said:
+
+- every ephemeral kind (20000–29999) — leases and heartbeats are liveness, not
+  history, and none of them is stored anywhere to be packed twice the same way;
+- NIP-29 moderation and membership kinds (9000–9022, 39000–39003), NIP-25
+  reactions (7), and NIP-09 deletion requests (5);
+- 5600 and 6600 themselves, or a pack would contain its own previous answers;
+- 38104 `agent_memory` and 38105 `agent_cursor` — another agent's scratch space
+  is not this agent's history.
+
+With `verbatim_only`, also drop every 8104 `summary`. A summary is somebody's
+account of events rather than the events, and a caller paying full price for
+history is entitled to refuse all of them without having to reason about who
+wrote which.
+
+**4. Collapse action chains.** Of the 8101 events sharing an `action` tag, keep
+the `proposed` transition and the one with the highest status rank; drop the
+rest. Rank is `proposed` 0, `awaiting_approval` 1, `running` 2, and every
+terminal status (`succeeded`, `failed`, `denied`, `cancelled`) 3; ties are broken
+by `(created_at, id)` ascending, keeping the last. The input and the outcome are
+what a later reader needs; "it started running" is inferable from both.
+
+**5. Mark the mandatory set.** The thread root, the 38101 thread state, every
+8102 and 8103, every 8101 that survived step 4, and the 10 most recent surviving
+events. These are never dropped for budget and never truncated. Approvals are in
+that list because an agent that has forgotten what it was allowed to do is
+exactly the failure this protocol exists to prevent.
+
+**6. Order** every surviving event ascending by `(created_at, id)`, the NIP-01
+rule, **except that the thread root sorts first whatever its `created_at` says**.
+Note that this is otherwise deliberately *not* the parent-link order that
+[action chains](#a-chain-is-ordered-by-its-parent-links-not-by-created_at) use.
+Nothing is authorised on a context pack, and a reader needs a stable transcript
+rather than a proof.
+
+The root is the one exception because every other event in the thread `E`-tags
+it, so its causal position is the one thing an ordering cannot get wrong by
+accident — and `(created_at, id)` gets it wrong routinely. A thread opened and
+answered inside the same second falls through to the lowest-id tiebreak, which
+is a hash, and the pack then opens with two replies to a task the model has not
+been told yet. The rule costs nothing: `T` is already known to both packers,
+because it is what they were asked for.
+
+**7. Fill the budget.** Every mandatory segment is included, whatever it costs.
+Then optional segments are considered newest first and admitted while they fit;
+at the first one that does not fit, admission **stops** and every older optional
+segment is dropped. Stopping rather than continuing keeps the kept window
+contiguous: a model handed the last hour with one arbitrary paragraph from
+Tuesday wedged into it reasons worse than one handed a shorter hour.
+
+**8. Truncate.** An optional segment's text is cut to 400 Unicode **code points**
+and `…` (U+2026) is appended, with `truncated: true`. Code points rather than
+bytes, because a byte cut can split a character; and implementations MUST NOT
+trim to a word boundary, because word boundaries are locale-dependent and two
+packers would disagree on the first Japanese sentence they were given.
+
+**9. Segment text** is the event's `content` for kinds 9, 11 and 1111; the
+`text` field of the body for 8104; and **the `alt` tag** for every other kind
+defined here. This is what [`alt` is required](#alt-is-required) for. The
+primary consumer of an unknown event is a context packer feeding a model, and a
+packer that understood every kind it emitted would break on the first kind added
+after it shipped.
+
+**10. Provenance** is derived from `events` alone, so that both packers label
+identically:
+
+- `kind` is `relay` for an author that signed a 38101 or 8108 in the input,
+  `agent` for one with a 38103 `agent_manifest` in the input, `human` otherwise.
+- `trust` is `self` for the requester; `operator` for the pubkey named as
+  `operator` in the *requester's own* manifest; `untrusted` for any `agent`
+  author and for every 8104 whoever wrote it; `member` otherwise.
+- `display_name` is omitted. There is no name in this NIP that is not a claim,
+  and a packer that resolved one would make its output depend on a lookup the
+  other packer cannot repeat.
+
+An agent SHOULD delimit `untrusted` segments before they reach a model, and MAY
+delimit `member` segments too: the distinction is who is accountable for the
+text, not whether it is safe.
+
+**11. Count tokens** as `ceil(utf8_bytes(text) / 4) + 8` per segment, summed.
+This is a proxy and not a tokenizer. A real BPE count is model-specific and
+versioned, so requiring one would make this NIP depend on a vendor's vocabulary
+file and make agreement between two packers contingent on both shipping the same
+build of it. The constant 8 covers the framing a caller adds per segment, which
+is real cost that a pure text count hides. `budget_tokens` is advisory precisely
+because this number is approximate; a caller needing an exact count MUST measure
+the rendered prompt itself.
+
+`dropped_events` counts the events that survived steps 2 and 3 but produced no
+segment, which includes the transitions collapsed in step 4.
+
+### Asking a packer
+
+A `context_pack_request` (5600) carries a `to`-marked `p` tag naming the packer.
+A packer MUST ignore requests not addressed to it; answering everything it can
+see would have every packer in a workspace answer every request, and the
+requester would have no way to know which answer it got.
+
+The reply is a 6600 signed by the packer, `e`-tagging the request and
+`p`-tagging the requester, in the same group. On failure the packer publishes a
+NIP-90 kind 7000 job feedback with `["status", "error"]` and a reason. Silence
+is not an answer: an agent blocked on context it will never receive is
+indistinguishable from one doing slow work.
+
+This departs from NIP-90 in one place. NIP-90 carries job parameters in `i` and
+`param` tags; Quorum carries the body in `content` as canonical JSON like every
+other kind here. One rule for every kind in this NIP is worth more than partial
+conformance to a tag convention, and what makes this a DVM rather than an
+endpoint is that the provider is addressed by pubkey.
+
+## Memory
+
+38104 `agent_memory` is an addressable event with `d` = a scoped key, so the
+newest write per `(pubkey, d)` wins and an agent's memory is namespaced by the
+key that wrote it. No agent can overwrite another's, and none has to coordinate
+over key names.
+
+Memory is **published**, and that is the point rather than an oversight. A
+workspace whose agents remember things nobody can read is a workspace where the
+answer to "why did it do that" lives on a disk somewhere; here it is an event a
+human can fetch, quote and argue with. The cost is that memory is subject to the
+[privacy rules](#privacy) like anything else: on a `plaintext` channel the relay
+and every member can read it, Nostr has no unpublish, and an agent MUST NOT
+write a secret into one.
+
+Memory is not a cursor. 38105 exists for resume state because the two have
+different lifetimes: a cursor is meaningless to anyone but the process that
+wrote it and is rewritten several times a minute, while a memory entry is
+supposed to outlive the agent that learned it. Packers drop both.
 
 ## Encryption
 

@@ -13,12 +13,14 @@
 
 import assert from 'node:assert/strict'
 import { after, describe, it } from 'node:test'
-import { Kinds, digest, refTo, threadRef } from '@quorum/protocol'
+import { Kinds, TagName, digest, refTo, tagValue, threadRef, type NostrEvent } from '@quorum/protocol'
 import { settle, waitFor, waitForCount } from '@quorum/test-kit'
 import {
+  Counters,
   Cursor,
   LocalSigner,
   MemoryStore,
+  Publisher,
   createAgent,
   hasRun,
   type Store,
@@ -440,6 +442,124 @@ describe('replicas', () => {
 
   it('and without the lease both of them do — so the lease is what stopped it', async () => {
     assert.equal(await twoReplicas(false), 2)
+  })
+})
+
+describe('publishing outside a handler', () => {
+  const MANIFEST = { name: 'reader', description: 'answers questions about a thread' }
+
+  /** The `counter` tag as a number, or undefined on an event that carries none. */
+  const counterOf = (event: NostrEvent): number | undefined => {
+    const raw = tagValue(event.tags, TagName.Counter)
+    return raw === undefined ? undefined : Number(raw)
+  }
+
+  it('allocates counters from the same ledger the handler does', async () => {
+    const h = await harness()
+    after(() => h.finish())
+
+    const signer = LocalSigner.generate()
+    const agent = createAgent({
+      relay: h.relay.url,
+      signer,
+      group: h.group,
+      store: new MemoryStore(),
+      leases: false,
+    })
+    h.cleanup(() => agent.stop())
+    agent.on(async (event, ctx) => {
+      await ctx.say(`echo: ${event.content}`)
+    })
+    await agent.start()
+
+    // A manifest, then an answer, then a shift report: the realistic mix. What
+    // must not happen is two of them carrying the same `counter`, which reads
+    // to anybody checking as the key being in two places at once.
+    await agent.publish({ kind: Kinds.AgentManifest, d: 'reader', body: MANIFEST })
+
+    const ada = await Actor.create(h.relay.url, h.group)
+    h.cleanup(() => ada.close())
+    await ada.thread('t', 'ping', [signer.publicKey])
+    await waitForCount(
+      () => h.relay.stored.filter((e) => e.pubkey === signer.publicKey && counterOf(e) !== undefined),
+      2,
+      { describe: 'the manifest and the reply' },
+    )
+    await agent.publish({ kind: Kinds.ChatMessage, text: 'going down for maintenance' })
+
+    const counters = await waitForCount(
+      () =>
+        h.relay.stored
+          .filter((e) => e.pubkey === signer.publicKey)
+          .flatMap((e) => (counterOf(e) === undefined ? [] : [counterOf(e)!])),
+      3,
+      { describe: 'three counted events' },
+    )
+    assert.deepEqual(
+      [...counters].sort((a, b) => a - b),
+      [1, 2, 3],
+      'one ledger, one sequence — a gap says the agent crashed and a duplicate says the key is shared',
+    )
+    assertAllValid(h.relay.received)
+  })
+
+  it('and a second Publisher over the same key duplicates one, which is why this exists', async () => {
+    const h = await harness()
+    after(() => h.finish())
+
+    const signer = LocalSigner.generate()
+    const agent = createAgent({
+      relay: h.relay.url,
+      signer,
+      group: h.group,
+      store: new MemoryStore(),
+      leases: false,
+    })
+    h.cleanup(() => agent.stop())
+    await agent.start()
+    await agent.publish({ kind: Kinds.AgentManifest, d: 'reader', body: MANIFEST })
+
+    // The shape `announce()` would have had without `Agent.publish`: a second
+    // Publisher over the agent's key, with its own Counters. It shares no store
+    // with the agent's, and would not help if it did — `Counters` caches its
+    // last value in memory as well, so the two allocate from separate copies of
+    // the same ledger and collide on the first write.
+    const rogue = new Publisher({
+      client: agent.client,
+      signer,
+      pubkey: signer.publicKey,
+      group: h.group,
+      counters: await Counters.load(new MemoryStore(), signer.publicKey),
+    })
+    await rogue.publish({ kind: Kinds.ChatMessage, text: 'a second opinion' })
+
+    const counters = h.relay.stored
+      .filter((e) => e.pubkey === signer.publicKey)
+      .flatMap((e) => (counterOf(e) === undefined ? [] : [counterOf(e)!]))
+    assert.deepEqual(counters, [1, 1], 'two publishers, one key, and the same counter twice')
+  })
+
+  it('refuses before start(), because the counter has not been recovered yet', async () => {
+    const h = await harness()
+    after(() => h.finish())
+
+    const agent = createAgent({
+      relay: h.relay.url,
+      signer: LocalSigner.generate(),
+      group: h.group,
+      store: new MemoryStore(),
+      leases: false,
+    })
+    h.cleanup(() => agent.stop())
+
+    // `start()` is what scans the relay for this key's highest counter. Publish
+    // before it and a restarted agent with an empty store begins again at 1,
+    // re-using numbers it already spent — the same duplicate, arrived at by a
+    // different route.
+    await assert.rejects(
+      agent.publish({ kind: Kinds.AgentManifest, d: 'reader', body: MANIFEST }),
+      /start\(\)/,
+    )
   })
 })
 

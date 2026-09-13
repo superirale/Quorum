@@ -33,14 +33,24 @@ import {
   refTo,
   tagValue,
   threadRef,
+  type ContextPackResultBody,
   type EventRef,
   type Filter,
   type NostrEvent,
 } from '@quorum/protocol'
-import { WORK_KINDS, addressedFilter, channelFilter, controlFilter, isForMe } from './addressing.ts'
+import {
+  WORK_KINDS,
+  addressedFilter,
+  channelFilter,
+  controlFilter,
+  isForMe,
+  threadFilter,
+} from './addressing.ts'
 import { runAction, type ActOptions, type ActResult } from './approval.ts'
 import { RelayClient, type Logger, type Subscription } from './client.ts'
+import { fetchContext, packContext, type FetchContextOptions } from './context.ts'
 import { Counters } from './counter.ts'
+import { createMemory, type Memory } from './memory.ts'
 import { LeaseManager, type Lease, type LeaseOptions } from './lease.ts'
 import { createOnce, incompleteEffects, type Once } from './once.ts'
 import { PresenceReporter, type PresenceOptions } from './presence.ts'
@@ -108,6 +118,16 @@ export interface AgentContext {
   act<I, T>(options: ActOptions<I, T>): Promise<ActResult<T>>
   /** Claim this thread, so a sibling replica does not answer it too. */
   lease(purpose?: string): Promise<Lease>
+  /**
+   * This thread's history, compacted to a token budget and labelled by trust.
+   *
+   * Packed locally by default. Pass `packer` to ask a relay-hosted one instead,
+   * which is a round trip rather than a backfill — and gives the same answer,
+   * which is the property `extractive-v1` exists to have. See `context.ts`.
+   */
+  context(options?: ContextOptions): Promise<ContextPackResultBody>
+  /** What this agent has learned, published as kind 38104. See `memory.ts`. */
+  readonly memory: Memory
   /** Authors we have provably missed something from. Ordering layer 1. */
   gaps(): Gap[]
   /** The connection, for anything this interface does not cover yet. */
@@ -125,6 +145,11 @@ export interface SayOptions {
    * number. See `once.ts`.
    */
   label?: string
+}
+
+export interface ContextOptions extends Partial<FetchContextOptions> {
+  /** Which thread to pack. Defaults to the one the triggering event is in. */
+  thread?: string
 }
 
 export type Handler = (event: NostrEvent, ctx: AgentContext) => void | Promise<void>
@@ -149,6 +174,7 @@ export class Agent {
   private cursor!: Cursor
   private counters!: Counters
   private publisher!: Publisher
+  private memoryCache: Memory | undefined
   private leases: LeaseManager | undefined
   private presence: PresenceReporter | undefined
   private subscription: Subscription | undefined
@@ -244,6 +270,29 @@ export class Agent {
     }
 
     await this.subscribe()
+  }
+
+  /**
+   * Publish under this agent's key, outside any handler.
+   *
+   * For the things an agent says because it started rather than because
+   * somebody asked: its manifest, a shift report, a note that it is going down
+   * for maintenance. Inside a handler use `ctx.publish`, which is this plus a
+   * `once()` label — a handler is replayed after a restart and an unguarded
+   * publish there is a second copy of a message somebody already read.
+   *
+   * It exists because the alternative is worse. Without it, anything that needs
+   * to speak outside a handler builds a second {@link Publisher} over the same
+   * key, and a `Counters` holds its last value in memory as well as in the
+   * store — so the two allocate from the same ledger, diverge on the first
+   * write, and eventually give two different events the same `counter`. A gap
+   * in a sequence says the agent crashed; a duplicate says the key is in two
+   * places at once, which is a much more alarming thing to make somebody
+   * investigate, and it would have been this API's fault.
+   */
+  async publish(options: PublishOptions): Promise<NostrEvent> {
+    if (!this.running) throw new Error('start() the agent before publishing under its key')
+    return this.publisher.publish(options)
   }
 
   async stop(): Promise<void> {
@@ -533,8 +582,84 @@ export class Agent {
         return agent.leases.acquire(thread, purpose)
       },
 
+      async context(options = {}) {
+        const id = options.thread ?? thread?.id
+        if (!id) {
+          throw new Error(
+            'context is packed per thread, and this event is not in one. Pass ' +
+              '`{ thread }` explicitly, or handle a threaded event.',
+          )
+        }
+        const { packer, thread: _thread, ...rest } = options
+
+        // Deliberately not through `once()`. A replayed handler needs its
+        // context again, and a cached 5600 would hand back the id of a request
+        // the packer answered before the restart — so the wait below would sit
+        // on a subscription for a reply that has already been and gone.
+        if (packer) {
+          return fetchContext(
+            {
+              client: agent.client,
+              group: agent.options.group,
+              publish: (options) => agent.publisher.publish(options),
+            },
+            { ...rest, thread: id, packer },
+          )
+        }
+        return packContext({
+          ...rest,
+          thread: id,
+          requester: agent.pubkey,
+          events: await agent.threadEvents(id),
+        })
+      },
+
+      get memory() {
+        return agent.memoryFor()
+      },
+
       gaps: () => this.cursor.gaps(),
     }
+  }
+
+  /**
+   * Everything the packer needs about one thread, in a single round trip.
+   *
+   * Four filters and not one, because a thread is not a single tag query. The
+   * root carries no `E` tag — it *is* the root — and the relay's 38101 carries
+   * `d` and no `E` either, since it is a projection about the thread rather
+   * than an utterance in it. Ask only `{"#E": [id]}` and you get the
+   * conversation with both the title and the task state missing, which is the
+   * shape of pack that looks fine until an agent asks what it is supposed to be
+   * doing.
+   *
+   * The fourth is the workspace's agent manifests, which are not about this
+   * thread at all. They are here because provenance is derived from the event
+   * set and nothing else: without them every agent in the result is labelled
+   * `human`, `untrusted` collapses into `member`, and a caller stops fencing
+   * another agent's output before a model reads it. The relay's packer gathers
+   * the same four, and it has to — a local pack and a relay pack that disagreed
+   * about who is an agent would be two different answers to the same question,
+   * which is the failure this whole design is arranged to prevent.
+   */
+  private threadEvents(id: string): Promise<NostrEvent[]> {
+    const group = this.options.group
+    return this.client.query([
+      threadFilter({ group, threadId: id }),
+      { ids: [id] },
+      { kinds: [Kinds.ThreadState], [`#${TagName.Identifier}`]: [id], [`#${TagName.Group}`]: [group] },
+      { kinds: [Kinds.AgentManifest], [`#${TagName.Group}`]: [group] },
+    ])
+  }
+
+  private memoryFor(): Memory {
+    this.memoryCache ??= createMemory({
+      client: this.client,
+      publish: (options) => this.publisher.publish(options),
+      pubkey: this.pubkey,
+      group: this.options.group,
+    })
+    return this.memoryCache
   }
 }
 
