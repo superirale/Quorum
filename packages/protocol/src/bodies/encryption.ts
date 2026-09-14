@@ -187,3 +187,48 @@ export const MlsWelcomeBody = z.object({
   key_package: EventId,
 })
 export type MlsWelcomeBody = z.infer<typeof MlsWelcomeBody>
+
+/**
+ * `mls_commit` (8112) — the half of a membership change the existing members get.
+ *
+ * Broadcast rather than addressed: every member already in the tree must apply
+ * it, and the new member must not — they arrive at the post-commit epoch through
+ * their Welcome, so the commit that added them is already behind them.
+ *
+ * See `RegularKinds.MlsCommit` for why this exists at all and why it is not
+ * sealed. What follows is why the epoch is here rather than in a tag.
+ */
+export const MlsCommitBody = z.object({
+  /**
+   * The epoch the commit was created at — the one it applies *to*.
+   *
+   * Not the epoch it produces. A receiver's question is "can I apply this?", and
+   * that is answered by comparing this number with their own: equal means apply,
+   * lower means already applied (a backfill, which must be silent rather than an
+   * error), higher means a commit was missed and this member is stranded and has
+   * to be told so rather than left to meet an HPKE error later.
+   */
+  epoch: MlsEpoch,
+
+  /**
+   * base64 of a framed MLSMessage carrying the commit.
+   *
+   * A `PrivateMessage`, so its contents are encrypted to the group at the epoch
+   * it names. The relay stores it, routes it, orders it and cannot read it, which
+   * is the whole of the delivery service RFC 9420 assumes and does not specify.
+   */
+  commit: z.string().min(1).describe('base64 framed MLSMessage'),
+
+  /**
+   * Who this commit adds, if anyone, by pubkey.
+   *
+   * Redundant with the ciphertext and deliberately so: it is how a member who
+   * *did* miss a commit can find out what happened to their channel, and how an
+   * operator answers "when did this agent get access" without holding a key that
+   * forward secrecy has already deleted. An empty list is a commit that changed
+   * something else. A receiver MUST NOT trust it — the tree is the truth, and
+   * this is a claim by the committer — so nothing may be authorised on its say-so.
+   */
+  adds: z.array(Pubkey).default([]).describe('pubkeys this commit adds, as claimed'),
+})
+export type MlsCommitBody = z.infer<typeof MlsCommitBody>

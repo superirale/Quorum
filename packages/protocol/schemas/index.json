@@ -91,6 +91,11 @@
       "body": "body-8111-mls-welcome.json",
       "requires": {}
     },
+    "8112": {
+      "name": "MlsCommit",
+      "body": "body-8112-mls-commit.json",
+      "requires": {}
+    },
     "28101": {
       "name": "Interrupt",
       "body": "body-28101-interrupt.json",
@@ -164,6 +169,7 @@
     "8109",
     "8110",
     "8111",
+    "8112",
     "28101",
     "28102",
     "28103",
@@ -203,6 +209,7 @@
       "8108",
       "8110",
       "8111",
+      "8112",
       "22242",
       "30443",
       "38101",

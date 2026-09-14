@@ -85,6 +85,7 @@ whole human conversation with no modification.
 | 8109 | `thread_op` | Requests a change to thread state. |
 | 8110 | `channel_key` | One member's copy of a channel's epoch key, wrapped to them. |
 | 8111 | `mls_welcome` | One member's MLS Welcome and the ratchet tree, wrapped to them. |
+| 8112 | `mls_commit` | An MLS commit, broadcast so every member advances to the same epoch. |
 
 ### Ephemeral (not stored, 20000–29999)
 
@@ -1050,6 +1051,11 @@ Two kinds make the mode possible and both stay unsealed:
   (the **event id** of the 30443 this Welcome answers). The recipient is also
   named by a `to`-marked `p` tag. See
   [key establishment](#key-establishment-on-an-mls-channel).
+- **`mls_commit` (8112)**, the message that moves every member to the next epoch.
+  Body: `epoch` (the epoch the commit applies to), `commit` (base64 of a framed
+  `mls_private_message` MLSMessage), and `adds` (the pubkeys the committer claims
+  it is adding, which a receiver MUST NOT trust). No `to` tag: it is a broadcast
+  to the whole channel. See [the commit](#the-commit-must-be-broadcast).
 
 `supersedes` is how a member notices they were skipped: holding epoch 2 and
 being handed epoch 4 marked `supersedes: 3` says a rotation happened that nobody
@@ -1097,6 +1103,7 @@ they are private.
 | Kinds | Why |
 | --- | --- |
 | 8110, 8111, 38107, 30443 | key management — the bootstrap must be readable by someone with no key |
+| 8112 | already an MLS `PrivateMessage` — sealing it to the group would be circular |
 | 38102, 38106, 22242 | authorization — a capability nobody can audit is not a capability |
 | 8108, 38101, 7000 | relay-authored — the relay cannot encrypt to a key it does not hold |
 | 9000–9030, 39000–39999 | NIP-29 moderation and metadata, addressed to the relay |
@@ -1108,6 +1115,11 @@ NIP-44 payload from the inviter to the one recipient — a different key from th
 group's, so the envelope being in the clear reveals only that somebody was
 invited. Sealing either to the group would be sealing it to everybody except the
 person it is for.
+
+8112 is the exception to the exception: its readers *are* members holding a key.
+It is unsealed because its content is already encrypted to the group, so sealing
+it would make applying a commit require the state that applying the commit is
+what produces. See [the commit](#the-commit-must-be-broadcast).
 
 Everything else MUST be sealed on a channel whose policy says `nip44` or `mls`. A relay
 MAY refuse an unsealed content-bearing event on such a channel, and MAY refuse an
@@ -1318,13 +1330,15 @@ correctness for the remaining members, since the commit reaches them either way.
 
 ### Key establishment on an `mls` channel
 
-Two kinds, in four acts, and the order is fixed by the relay rather than by
+Three kinds, in five acts, and the order is fixed by the relay rather than by
 preference:
 
 1. the joiner publishes a **kind 30443** KeyPackage into the channel;
 2. a member already in the tree reads it and checks it;
-3. that member commits an Add and publishes one **kind 8111** per new member;
-4. the new member opens their 8111 and joins the ratchet.
+3. that member commits an Add and broadcasts it as a **kind 8112**;
+4. the same member publishes one **kind 8111** per new member;
+5. the new member opens their 8111 and joins the ratchet, and every existing
+   member applies the 8112 — see [the commit](#the-commit-must-be-broadcast).
 
 Act 1 cannot happen before NIP-29 admission, because the event carries an `h`
 tag and a workspace relay refuses those from non-members. That is the design
@@ -1390,11 +1404,17 @@ node. `key_package` names the 30443 **by event id**, not by coordinate, because 
 KeyPackage is single-use and the addressable slot may already hold its
 replacement by the time the invitee reads it.
 
-The committer MUST commit before publishing. A crash in the gap costs the
+**The order is the 8112, then the ratchet, then the 8111s**, and each step is
+before the next for a different reason. The commit is broadcast first because
+whether it is the group's next epoch at all is decided by the delivery service
+and not by the committer — see [the commit](#the-commit-must-be-broadcast). The
+Welcomes go last because the group must have actually moved before anyone is
+handed entry to it: publishing them first would hand out entry to an epoch that
+may never exist, which is unrecoverable because the recipient's KeyPackage is
+spent either way. A crash between the ratchet and the last Welcome costs the
 missed invitee their invitation — they are in the tree, can read nothing, and
-must be removed and re-added. Publishing first would hand out entry to an epoch
-the group never moved to, which is unrecoverable in the other direction because
-the recipient's KeyPackage is spent either way.
+must be removed and re-added — which is the only one of the three failures that
+is recoverable.
 
 A recipient whose current KeyPackage is not named in a Welcome's secrets MUST
 treat it as not theirs rather than as an error — a member added, removed and
@@ -1421,6 +1441,69 @@ storage range, so a stored 444 has undefined semantics on a generic relay, which
 the rule that every Quorum event is valid on any relay does not permit. And
 10050 has no reader here, because a Quorum invitee is already a NIP-29 member of
 the workspace relay by act 1.
+
+### The commit must be broadcast
+
+Every MLS commit changes the group's key schedule, and every member has to apply
+the same one or the group splits. A committer that keeps the new state and drops
+the commit message advances alone: from the next message onward, every other
+member fails to decrypt, deep inside an MLS implementation, with no epoch and no
+group and no member named in the error. This is invisible in a two-member group,
+because the only other member is the one who committed.
+
+So: **a member that commits MUST publish the commit message as a kind 8112
+before advancing its own state, and a member that receives one MUST apply it.**
+
+```json
+{
+  "epoch": 3,
+  "commit": "<base64 framed mls_private_message MLSMessage>",
+  "adds": ["<pubkey>", "…"]
+}
+```
+
+**`epoch` is the epoch the commit was created at** — the one it applies to, not
+the one it produces — and it is in the clear in the body rather than read out of
+the MLSMessage. That is deliberate: it is what lets a relay serialise commits
+without implementing any part of MLS, which is the property that keeps
+`enc=mls` a client-only concern. A receiver MUST compare it with its own epoch
+and MUST distinguish three cases. Equal means apply it. Lower means it has
+already been applied — the ordinary result of a backfill, which MUST be silent
+rather than an error, since a relay re-serves the whole history on every
+reconnect. Higher means a commit was missed, and there is no catching a ratchet
+up across a commit it never held; a receiver MUST report that the member is
+stranded and must be removed and re-added, rather than leaving every subsequent
+message to fail as a decryption error.
+
+`adds` names the pubkeys the committer claims to be adding. A receiver **MUST
+NOT** trust it: the tree is the truth and this is a claim, useful for a
+notification and for the `alt` line and for nothing that decides access.
+
+8112 is [unsealed](#which-kinds-stay-in-the-clear), and for a different reason from
+every other kind on that list. The others are unsealed because their readers hold
+no key; a commit's readers are members who do. It is unsealed because its content
+is *already* an MLS `PrivateMessage`, so sealing it would encrypt to the group
+something encrypted to the group — and a member who missed the previous commit
+could not open the envelope carrying the commit they need, which is exactly the
+deadlock this kind exists to break.
+
+**Two members may commit from the same epoch, and only one commit can win.** The
+committer therefore MUST publish before advancing, which is the reverse of the
+[state-first rule](#a-ratchet-cannot-repeat-itself) for application messages, and
+for a reason that does not apply there: a message's validity is decided by its
+sender, a commit's by everyone else. Advance first and a committer whose commit
+is refused has removed itself from its own channel, silently. A relay implementing
+this spec SHOULD store at most one 8112 per group per epoch and refuse the rest —
+which it can do from the body alone — and on any other relay carrying the channel
+a receiver MUST settle a tie deterministically, lowest event id first, so that
+every member picks the same winner. A committer that loses is stranded by the
+rule above and must be re-added, which is the correct outcome and not a
+degradation of it.
+
+A receiver MUST apply commits in ascending `epoch`, which is not the order a
+relay serves them in: NIP-01 returns newest first. Applying them as they arrive
+fails on the first one with "a commit was missed", about a member who missed
+nothing.
 
 ### A ratchet cannot repeat itself
 

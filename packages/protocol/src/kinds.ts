@@ -128,6 +128,44 @@ export const RegularKinds = {
    * happen first. See `bodies/encryption.ts`.
    */
   MlsWelcome: 8111,
+  /**
+   * One MLS commit, broadcast to the members who are already in the tree.
+   *
+   * A Welcome carries a *new* member into the group. This carries the existing
+   * members across with them, and without it they are left behind: MLS advances
+   * the key schedule on every commit, so a member who never processes one holds
+   * epoch N while the committer writes at N+1, and every message after that is
+   * unreadable to them. Not "unreadable" in the way an encrypted channel is
+   * unreadable to an outsider — unreadable to a member in good standing, with no
+   * event anywhere saying what went wrong.
+   *
+   * That failure was live in this repo until it was tested with three members.
+   * `add()` created the commit, kept the new state and dropped the message, so
+   * the second person added to any channel silently locked out the first. The
+   * error that surfaced was `CryptoError: OperationError` from HPKE, four frames
+   * inside `ts-mls`, which is the least actionable thing this system has ever
+   * printed.
+   *
+   * ## Unsealed, and not for the usual reason
+   *
+   * 8110, 8111, 30443 and 38107 are on `UNSEALED_KINDS` because their readers
+   * hold no key yet. A commit's readers are members who hold one. It is on the
+   * list because the content is *already* an MLS `PrivateMessage` — sealing a
+   * commit inside an application message of the group the commit is advancing
+   * would require the recipient to do the thing the commit is what enables, and
+   * would encrypt, to exactly the same group, something already encrypted to it.
+   *
+   * ## The epoch in the body is what orders them
+   *
+   * `epoch` is the epoch the commit was created *at*, not the one it produces,
+   * because that is the question a receiver has: *can I apply this?* It is in
+   * the body rather than in the `epoch` tag, which means what it says on a
+   * sealed event — the epoch the content was sealed under — and this content is
+   * not sealed by us. It is in the clear so that a relay can serialise commits
+   * without parsing an MLSMessage, which is the difference between a relay that
+   * needs no MLS code and one that needs a wire-format parser.
+   */
+  MlsCommit: 8112,
 } as const
 
 /**

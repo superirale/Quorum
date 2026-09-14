@@ -26,6 +26,7 @@ import { bytesToHex } from '@noble/hashes/utils.js'
 import {
   BorrowedKinds,
   Kinds,
+  MlsCommitBody,
   MlsWelcomeBody,
   RegularKinds,
   addressees,
@@ -55,14 +56,17 @@ import {
   RelayClient,
   SealedEnvelopes,
   acceptMlsInvite,
+  catchUpMls,
   credentialPubkey,
   fetchKeyPackages,
+  fetchMlsCommits,
   fetchMlsWelcomes,
   inviteToMls,
   mlsCiphersuite,
   mlsKeyPackage,
   publishKeyPackage,
   type MlsIdentity,
+  type MlsInvitation,
 } from '../src/index.ts'
 
 const group = 'ops'
@@ -143,6 +147,42 @@ async function channel(extra: Member[] = []): Promise<Channel> {
       await relay.stop()
     },
   }
+}
+
+/**
+ * All four acts, for the tests that need somebody *in* the tree rather than a
+ * claim about how they got there.
+ *
+ * The KeyPackage fetch is filtered to the joiner because a 30443 stays in its
+ * addressable slot after it has been spent, so on the third invitation the
+ * inviter reads back the packages of members who are already in the group.
+ * Re-adding an existing leaf is not what any of these tests mean.
+ */
+async function join(inviter: Member, joiner: Member): Promise<MlsInvitation> {
+  await publishKeyPackage({ publisher: joiner.publisher, group, identity: joiner.identity, ciphersuite: cs })
+  const all = await fetchKeyPackages(inviter.client, group, { ciphersuite: cs })
+  const packages = all.filter((p) => p.pubkey === joiner.pubkey)
+  assert.equal(packages.length, 1, 'the inviter found exactly one package for the joiner')
+
+  const invitation = await inviteToMls({
+    publisher: inviter.publisher,
+    signer: inviter.signer,
+    crypto: inviter.crypto,
+    group,
+    packages,
+  })
+  assert.ok(invitation)
+
+  const waiting = await fetchMlsWelcomes(joiner.client, joiner.pubkey, group)
+  const accepted = await acceptMlsInvite({
+    signer: joiner.signer,
+    crypto: joiner.crypto,
+    identity: joiner.identity,
+    event: waiting[waiting.length - 1]!,
+    ciphersuite: cs,
+  })
+  assert.equal(accepted, true, 'the joiner accepted the Welcome')
+  return invitation
 }
 
 /**
@@ -635,6 +675,183 @@ describe('the Welcome', () => {
       // And the ratchet was not touched on the way to finding that out.
       assert.equal(c.bob.crypto.joined, false)
     } finally {
+      await c.close()
+    }
+  })
+})
+
+/**
+ * The commit, which is the transport that was missing until a three-member
+ * group was actually built.
+ *
+ * `add()` used to create the commit, keep the resulting state and drop the
+ * message, which every existing test agreed with: a two-member group is added
+ * to by its only other member, who applies the commit by producing it. The
+ * second person added to any channel silently locked the first one out, and the
+ * error was `CryptoError: OperationError` from HPKE four frames inside `ts-mls`
+ * — no epoch, no group, no member, nothing naming the cause.
+ *
+ * So the headline test below is the three-member one, and the control beside it
+ * is a Bob who does not catch up. Without the control the test would pass
+ * against an `applyCommit` that did nothing, because it cannot tell "the commit
+ * was delivered and applied" from "the commit was never needed".
+ */
+describe('the commit', () => {
+  it('keeps the first member readable when a third one is added', async () => {
+    const c = await channel()
+    const cat = await member(c.relay.url)
+    try {
+      await join(c.ada, c.bob)
+      const first = await c.ada.publisher.publish({ kind: Kinds.ChatMessage, text: 'one' })
+      assert.equal(await c.bob.crypto.open(first), 'one')
+
+      await join(c.ada, cat)
+      assert.equal(await catchUpMls(c.bob.client, c.bob.crypto, group), 1)
+      assert.equal(c.bob.crypto.epoch, c.ada.crypto.epoch)
+
+      const second = await c.ada.publisher.publish({ kind: Kinds.ChatMessage, text: 'two' })
+      assert.equal(await cat.crypto.open(second), 'two')
+      assert.equal(await c.bob.crypto.open(second), 'two')
+      assert.deepEqual(
+        c.bob.crypto.members.sort(),
+        [c.ada.pubkey, c.bob.pubkey, cat.pubkey].sort(),
+      )
+    } finally {
+      cat.client.close()
+      await c.close()
+    }
+  })
+
+  it('and without that catch-up the first member reads nothing, which is the defect', async () => {
+    // The negative control, and the only thing that makes the test above mean
+    // anything. This is exactly what shipped before kind 8112 existed: Bob is
+    // still in the tree, still a NIP-29 member, still receiving every event,
+    // and every one of them fails to decrypt inside a library he did not write.
+    const c = await channel()
+    const cat = await member(c.relay.url)
+    try {
+      await join(c.ada, c.bob)
+      await join(c.ada, cat)
+
+      const said = await c.ada.publisher.publish({ kind: Kinds.ChatMessage, text: 'two' })
+      assert.equal(await cat.crypto.open(said), 'two')
+      await assert.rejects(() => c.bob.crypto.open(said))
+      assert.equal(c.bob.crypto.epoch, c.ada.crypto.epoch - 1)
+    } finally {
+      cat.client.close()
+      await c.close()
+    }
+  })
+
+  it('states the epoch it applies to in the clear, so the relay can order commits', async () => {
+    // The body is JSON and the epoch is a number in it, deliberately. The relay
+    // has to serialise commits — at most one per group per epoch — and doing
+    // that from the MLSMessage would mean an MLS wire parser in Go, which is
+    // the one thing this milestone is built to avoid.
+    const c = await channel()
+    try {
+      const before = c.ada.crypto.epoch
+      const invitation = await join(c.ada, c.bob)
+
+      assert.ok(!isSealed(invitation.commit))
+      const body = MlsCommitBody.parse(JSON.parse(invitation.commit.content))
+      assert.equal(body.epoch, before, 'the epoch the commit was created at, not the one it leads to')
+      assert.equal(c.ada.crypto.epoch, before + 1)
+      assert.deepEqual(body.adds, [c.bob.pubkey])
+    } finally {
+      await c.close()
+    }
+  })
+
+  it('replays a commit already applied as a no-op rather than an error', async () => {
+    // A relay serves the whole history on every backfill, so a member meets
+    // every commit it has ever applied each time it reconnects. Throwing on one
+    // would make a reconnect an incident.
+    const c = await channel()
+    const cat = await member(c.relay.url)
+    try {
+      await join(c.ada, c.bob)
+      await join(c.ada, cat)
+      assert.equal(await catchUpMls(c.bob.client, c.bob.crypto, group), 1)
+
+      const at = c.bob.crypto.epoch
+      assert.equal(await catchUpMls(c.bob.client, c.bob.crypto, group), 0)
+      assert.equal(c.bob.crypto.epoch, at)
+      // Including the commit that added Bob himself, which he never applied:
+      // he arrived at the epoch it produced, by Welcome.
+      assert.equal((await fetchMlsCommits(c.bob.client, group)).length, 2)
+    } finally {
+      cat.client.close()
+      await c.close()
+    }
+  })
+
+  it('orders commits by the epoch in the body, not by when they arrived', async () => {
+    // Applying them in arrival order fails on the first one with "a commit was
+    // missed", which is a true sentence about a member who missed nothing. NIP-01
+    // serves newest first; `FakeRelay` happens to serve oldest first, so an
+    // assertion against it alone is vacuous — the old commit is republished here
+    // so that arrival order and epoch order genuinely disagree. That is not a
+    // contrived case: every Quorum event is valid on any relay, so backfilling
+    // from a second relay carrying the channel delivers old commits last.
+    const c = await channel()
+    const cat = await member(c.relay.url)
+    try {
+      const first = await join(c.ada, c.bob)
+      await join(c.ada, cat)
+      const stale = MlsCommitBody.parse(JSON.parse(first.commit.content))
+      // Into a later second, deliberately and at the cost of a slow test.
+      // `created_at` has one-second resolution and the fake relay breaks a tie
+      // on the event id, so without this the arrival order is decided by a hash
+      // and the assertion below passes or fails at random — which is worse than
+      // not making it, because the mutation it is meant to catch would survive
+      // most runs.
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+      await c.ada.publisher.publish({ kind: RegularKinds.MlsCommit, body: stale })
+
+      const arrived = await c.ada.client.query([
+        { kinds: [RegularKinds.MlsCommit], '#h': [group], limit: 100 },
+      ])
+      const epochs = (events: NostrEvent[]) =>
+        events.map((e) => MlsCommitBody.parse(JSON.parse(e.content)).epoch)
+      // The relay's own order is asserted as "ends on the stale one", not as a
+      // literal array: the two commits published in the same second are tied on
+      // `created_at` and separated by a hash, so which of them comes first is
+      // not a fact about anything.
+      assert.equal(epochs(arrived).at(-1), 0, 'the relay served an old commit last')
+      assert.deepEqual(epochs(await fetchMlsCommits(c.ada.client, group)), [0, 0, 1])
+    } finally {
+      cat.client.close()
+      await c.close()
+    }
+  })
+
+  it('says a member is stranded rather than letting every later message fail', async () => {
+    // There is no catching a ratchet up across a commit it never held, so the
+    // only honest answer is to say so once, by name, at the moment it is
+    // discovered — instead of leaving the member to meet `OperationError` on
+    // every message for the rest of the channel's life.
+    const c = await channel()
+    const cat = await member(c.relay.url)
+    const dan = await member(c.relay.url)
+    try {
+      await join(c.ada, c.bob)
+      await join(c.ada, cat)
+      await join(c.ada, dan)
+
+      const commits = await fetchMlsCommits(c.bob.client, group)
+      const latest = commits[commits.length - 1]!
+      await assert.rejects(
+        () => c.bob.crypto.applyCommit(latest, MlsCommitBody.parse(JSON.parse(latest.content))),
+        /a commit was missed/,
+      )
+      // And the failed attempt left the ratchet where it was, so catching up
+      // properly still works.
+      assert.equal(await catchUpMls(c.bob.client, c.bob.crypto, group), 2)
+      assert.equal(c.bob.crypto.epoch, c.ada.crypto.epoch)
+    } finally {
+      dan.client.close()
+      cat.client.close()
       await c.close()
     }
   })

@@ -40,6 +40,7 @@ import {
   mlsCiphersuite,
   mlsKeyPackage,
   type MlsIdentity,
+  type PublishCommit,
   type Store,
 } from '../src/index.ts'
 
@@ -53,6 +54,18 @@ let cs: CiphersuiteImpl
 before(async () => {
   cs = await mlsCiphersuite()
 })
+
+/**
+ * A `PublishCommit` that drops the commit on the floor.
+ *
+ * Legitimate here and nowhere else. Every group in this file is built by adding
+ * its second member, and the only member who already exists is the committer,
+ * who applies the commit itself rather than reading it back off the wire. The
+ * moment there is a *third* member the commit has to be delivered, which is
+ * what the three-member test in `mls-keys.test.ts` is for — and is the failure
+ * kind 8112 exists because of.
+ */
+const discard: PublishCommit = async () => {}
 
 /** One member: their store, their archive, their ratchet. */
 interface Member {
@@ -83,7 +96,7 @@ async function pair(group = 'ops'): Promise<{ ada: Member; bob: Member }> {
   const ada = await member(ADA, group)
   const bob = await member(BOB, group)
   await ada.crypto.create(ada.identity)
-  const welcome = await ada.crypto.add([bob.identity.publicPackage])
+  const welcome = await ada.crypto.add([bob.identity.publicPackage], discard)
   assert.ok(welcome, 'adding a member produces a Welcome')
   await bob.crypto.join(welcome, bob.identity, ada.crypto.ratchetTree)
   return { ada, bob }
@@ -327,7 +340,7 @@ describe('MlsCrypto', () => {
     it('refuses a Welcome for a different channel than the one it is joining', async () => {
       const elsewhere = await pair('finance')
       const bob = await member(BOB, 'ops')
-      const welcome = await elsewhere.ada.crypto.add([bob.identity.publicPackage])
+      const welcome = await elsewhere.ada.crypto.add([bob.identity.publicPackage], discard)
       assert.ok(welcome)
 
       await assert.rejects(
@@ -511,10 +524,91 @@ describe('MlsCrypto', () => {
       // channel with it.
       const { ada, bob } = await pair()
       const before = ada.crypto.epoch
+      let published = 0
 
-      assert.equal(await ada.crypto.add([]), undefined)
+      assert.equal(
+        await ada.crypto.add([], async () => {
+          published += 1
+        }),
+        undefined,
+      )
+      assert.equal(published, 0, 'and nothing was broadcast to say it had happened')
       assert.equal(ada.crypto.epoch, before)
       assert.equal(await bob.crypto.open(await say(ada, 'still readable')), 'still readable')
+    })
+
+    it('does not advance when the commit could not be published', async () => {
+      // The ordering rule, and the one place it is visible. Everywhere else in
+      // this file state is written first; a commit is published first, because
+      // whether it is the group's next epoch is decided by the delivery service
+      // and not by the committer. Advance first and a member whose commit is
+      // refused has moved to a state no one else will ever reach — it has
+      // removed itself from its own channel and nothing says so.
+      const { ada, bob } = await pair()
+      const cat = await member(MALLORY)
+      const before = ada.crypto.epoch
+
+      await assert.rejects(
+        () =>
+          ada.crypto.add([cat.identity.publicPackage], async () => {
+            throw new Error('the relay refused it')
+          }),
+        /the relay refused it/,
+      )
+
+      assert.equal(ada.crypto.epoch, before)
+      assert.equal(await bob.crypto.open(await say(ada, 'still in the group')), 'still in the group')
+    })
+
+    it('refuses a commit lifted out of another channel', async () => {
+      // Worse than the same attack on an application message, which misfiles a
+      // sentence. A commit accepted from elsewhere rewrites this group's
+      // membership.
+      const ops = await member(ADA, 'ops')
+      await ops.crypto.create(ops.identity)
+      const finance = await member(ADA, 'finance')
+      const joiner = await member(BOB, 'finance')
+      await finance.crypto.create(finance.identity)
+
+      let message: Uint8Array | undefined
+      await finance.crypto.add([joiner.identity.publicPackage], async (m) => {
+        message = m
+      })
+      assert.ok(message)
+
+      // Only the id is read, and only to name the event in the error.
+      const carrier = { id: 'd'.repeat(64) } as NostrEvent
+      await assert.rejects(
+        () =>
+          ops.crypto.applyCommit(carrier, {
+            epoch: 0,
+            commit: base64.encode(message!),
+            adds: [],
+          }),
+        /arrived in ops/,
+      )
+      assert.equal(ops.crypto.epoch, 0)
+    })
+
+    it('refuses an application message published as a commit', async () => {
+      // A member can put anything in an 8112, and the group-id check passes for
+      // anything they legitimately sent. What stops it is that processing a
+      // `PrivateMessage` says which of the two it was — and the honest message
+      // must survive being used this way, or a member can silence the channel
+      // one message at a time by republishing each as a commit.
+      const { ada, bob } = await pair()
+      const said = await say(ada, 'not a commit')
+
+      await assert.rejects(
+        () =>
+          bob.crypto.applyCommit(said, {
+            epoch: bob.crypto.epoch,
+            commit: said.content,
+            adds: [],
+          }),
+        /carries a body, not a commit/,
+      )
+      assert.equal(await bob.crypto.open(said), 'not a commit')
     })
 
     it('a member added later cannot read what was said before they joined', async () => {
@@ -527,7 +621,7 @@ describe('MlsCrypto', () => {
       await bob.crypto.open(earlier)
 
       const mallory = await member(MALLORY)
-      const welcome = await ada.crypto.add([mallory.identity.publicPackage])
+      const welcome = await ada.crypto.add([mallory.identity.publicPackage], discard)
       assert.ok(welcome)
       await mallory.crypto.join(welcome, mallory.identity, ada.crypto.ratchetTree)
 
@@ -575,7 +669,7 @@ describe('MlsCrypto', () => {
       const ada = await member(ADA, 'ops', store)
       const bob = await member(BOB)
       await ada.crypto.create(ada.identity)
-      const welcome = await ada.crypto.add([bob.identity.publicPackage])
+      const welcome = await ada.crypto.add([bob.identity.publicPackage], discard)
       assert.ok(welcome)
       await bob.crypto.join(welcome, bob.identity, ada.crypto.ratchetTree)
 

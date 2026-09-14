@@ -105,6 +105,17 @@ export function defaultAlt(kind: number, body: unknown): string {
       return clamp(`Channel key epoch ${b.epoch} for ${short(b.recipient)}`)
     case Kinds.MlsWelcome:
       return clamp(`MLS welcome to epoch ${b.epoch} for ${short(b.recipient)}`)
+    case Kinds.MlsCommit:
+      // Says what the committer claims it does, and the body's own comment says
+      // that claim is not to be trusted. An `alt` is a rendering, not evidence:
+      // this line exists so a member who missed the commit can read *something*
+      // about what happened to their channel, which is more than the ciphertext
+      // will ever tell them.
+      return clamp(
+        (b.adds ?? []).length === 0
+          ? `MLS commit at epoch ${b.epoch}`
+          : `MLS commit at epoch ${b.epoch}, adding ${b.adds.map(short).join(', ')}`,
+      )
     case Kinds.ChannelPolicy:
       return clamp(
         b.enc === 'plaintext'

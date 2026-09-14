@@ -124,7 +124,7 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 | `archive.ts` | What forward secrecy forces a client to keep. `Archive` holds every event of a channel plus the plaintext this client read out of it, because on `mls` the relay's copy becomes unreadable and the relay is only the transport; `SealedEnvelopes` caches a sealed event before it is published, because a ratchet cannot produce byte-identical retries and `once()` rests on it. Both are plaintext on disk, deliberately — see below. |
 | `mls.ts` | The ratchet: `ts-mls` driven from behind the `mls` envelope, and the only file in the repo that imports an MLS library. `MlsCrypto` is a `ChannelSealer` like `ChannelCrypto` and shares nothing else with it — it holds one evolving state that opens each message *once*, rather than a map of epoch keys that opens anything any number of times. `mlsKeyPackage()` puts the Nostr pubkey in the credential; `create`/`add`/`join` are the ratchet half of membership. |
-| `mls-keys.ts` | The Nostr half of membership, in two kinds. `publishKeyPackage()` puts a KeyPackage in the addressable slot named for the channel; `fetchKeyPackages()` reads them back and refuses the six ways one can lie; `inviteToMls()` commits the Add and then publishes one kind 8111 per invitee; `acceptMlsInvite()` opens the one that is theirs. Nothing here holds a secret the ratchet does not. |
+| `mls-keys.ts` | The Nostr half of membership, in three kinds. `publishKeyPackage()` puts a KeyPackage in the addressable slot named for the channel; `fetchKeyPackages()` reads them back and refuses the six ways one can lie; `inviteToMls()` broadcasts the commit as a kind 8112, advances the ratchet and then publishes one kind 8111 per invitee; `acceptMlsInvite()` opens the one that is theirs; `catchUpMls()` applies the commits this member missed. Nothing here holds a secret the ratchet does not. |
 
 ## Design notes that cost something to learn
 
@@ -314,6 +314,28 @@ at GREASE. `suiteId()` passes them through rather than dropping them, because be
 somebody else's reader is the entire point of the exercise. Found by executing code that had
 typechecked for a day.
 
+**An MLS commit has to be broadcast, and for four milestones' worth of tests it did not have to
+be.** `add()` created the commit, kept the resulting state and dropped the message — which every
+test agreed with, because a two-member group is added to by its only other member, who applies
+the commit by producing it. The second person added to any channel silently locked the first one
+out, and the error was `CryptoError: OperationError` from HPKE four frames inside `ts-mls`, naming
+no epoch, no group and no member. Kind 8112 is the transport; `catchUpMls()` applies what a member
+missed. The test that matters is the three-member one, and the control beside it — a member who
+does not catch up — is what stops it passing against an `applyCommit` that does nothing.
+
+**The commit is published before the ratchet advances, which is the reverse of every other write
+in `mls.ts`.** An application message's validity is decided by its sender, so state-first is right
+there: a crash costs a visible duplicate rather than a silently-dropped message. A *commit's*
+validity is decided by everyone else — two members can commit from the same epoch and only one can
+win — so advancing first would let a committer whose event is refused remove itself from its own
+channel with nothing saying so. Publishing first costs nothing, because `ts-mls` is functional and
+`result.newState` is simply dropped.
+
+**The epoch is in the clear in the 8112 body, and that is what keeps MLS out of the relay.** The
+relay has to serialise commits — at most one per group per epoch — and reading the epoch out of
+the MLSMessage would mean an MLS wire parser in Go. A JSON body with a number in it does the same
+job. This was decided while part-way through writing that parser.
+
 **Only ciphersuite 1 can be constructed in this repo, which shapes one test rather than the
 code.** `getCiphersuiteImpl` for the P256 suites fails with `CodecError: Length too large to
 encode`, and the CHACHA20POLY1305 suites need `@hpke/chacha20poly1305`, an optional dependency
@@ -323,7 +345,7 @@ real foreign package; it forges the `cipherSuite` field on a genuine one, and sa
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 409 tests
+pnpm --filter @quorum/sdk test        # 418 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

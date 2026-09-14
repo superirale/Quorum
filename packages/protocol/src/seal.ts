@@ -151,14 +151,20 @@ export function isSealed(event: NostrEvent | UnsignedEvent): boolean {
  *
  * There are four reasons to be on this list and no fifth:
  *
- * **Key management** (8110, 38107, and under `mls` 30443 and 8111). A channel
- * key wrapped under the channel key is a locked box containing its own key. The
- * policy is what tells a writer to encrypt, so it must be readable by someone who
- * cannot yet decrypt anything. The two `mls` entries are the same argument at
- * the other end of the bootstrap: a KeyPackage is read by people who are *not*
- * in the group, and a Welcome is already encrypted to exactly one recipient —
- * sealing it to the group as well would mean the one member who needs to read it
- * is the one member who cannot.
+ * **Key management** (8110, 38107, and under `mls` 30443, 8111 and 8112). A
+ * channel key wrapped under the channel key is a locked box containing its own
+ * key. The policy is what tells a writer to encrypt, so it must be readable by
+ * someone who cannot yet decrypt anything. Two of the `mls` entries are the same
+ * argument at the other end of the bootstrap: a KeyPackage is read by people who
+ * are *not* in the group, and a Welcome is already encrypted to exactly one
+ * recipient — sealing it to the group as well would mean the one member who
+ * needs to read it is the one member who cannot.
+ *
+ * 8112, the commit, is the exception to the exception and is here for a
+ * different reason: its readers *are* members holding a key. Its content is
+ * already an MLS `PrivateMessage`, so sealing it would encrypt to the group
+ * something encrypted to the group, and would make applying the commit require
+ * the state that applying the commit is what produces.
  *
  * Those were written into the spec during the M10 spec pass and were missing
  * from this table for two commits, which is the drift the note at the bottom of
@@ -204,6 +210,7 @@ export const UNSEALED_KINDS: readonly number[] = Object.freeze([
   8108, // checkpoint — relay-authored
   8110, // channel_key — the `nip44` bootstrap
   8111, // mls_welcome — the `mls` bootstrap, already encrypted to one recipient
+  8112, // mls_commit — already an MLS PrivateMessage; sealing it would be circular
   22242, // client_auth — NIP-42, addressed to the relay
   30443, // mls_key_package — the `mls` bootstrap: read by people who are not in the group
   38101, // thread_state — relay-authored

@@ -87,6 +87,7 @@ import {
   mustSeal,
   openMlsEvent,
   sealMlsEvent,
+  type MlsCommitBody,
   type NostrEvent,
   type UnsignedEvent,
 } from '@quorum/protocol'
@@ -222,6 +223,13 @@ export class MlsBindingError extends Error {
   }
 }
 
+/**
+ * Put a commit where the other members will find it, and resolve when it is
+ * theirs. See {@link MlsCrypto.add} for why this is a callback rather than a
+ * return value: the group only moves if this resolves.
+ */
+export type PublishCommit = (message: Uint8Array, epoch: number) => Promise<void>
+
 /** Raised when a caller asks for group state this client does not have. */
 export class NotInMlsGroup extends Error {
   constructor(group: string) {
@@ -317,9 +325,13 @@ export class MlsCrypto implements ChannelSealer {
    * secrets reads the channel from any relay that carries it. Both acts are
    * required and neither may be inferred from the other.
    */
-  async add(keyPackages: readonly KeyPackage[]): Promise<Welcome | undefined> {
+  async add(
+    keyPackages: readonly KeyPackage[],
+    publish: PublishCommit,
+  ): Promise<Welcome | undefined> {
     if (keyPackages.length === 0) return undefined
     return this.serial(async () => {
+      const at = this.epoch
       const result = await createCommit(
         { state: this.require(), cipherSuite: this.deps.ciphersuite },
         {
@@ -329,8 +341,88 @@ export class MlsCrypto implements ChannelSealer {
           })),
         },
       )
+
+      // Published *before* the new state is kept, which is the opposite order
+      // from everywhere else in this file and is deliberate. A commit is the one
+      // ratchet step whose validity is decided by somebody else: two members can
+      // commit from the same epoch, only one of those can be the group's next
+      // epoch, and the delivery service is what settles it. Advance first and a
+      // committer whose event is refused has moved to a state no other member
+      // will ever reach — it has removed itself from its own channel, silently,
+      // and the only cure is to be re-added. Publish first and a refusal costs
+      // nothing at all, because `ts-mls` is functional and `result.newState` is
+      // simply dropped.
+      //
+      // The crash window this opens is the mirror of the Welcome's and is
+      // smaller: the commit is stored, every other member applies it, and the
+      // committer restarts an epoch behind holding a commit it cannot process
+      // (MLS has no way to apply your own commit except by keeping the state it
+      // produced). That member must be removed and re-added, and they can at
+      // least be *told* so, because the 8112 they published names the epoch they
+      // failed to reach.
+      await publish(encodeMlsMessage(result.commit), at)
       await this.commit(result.newState)
       return result.welcome
+    })
+  }
+
+  /**
+   * Apply a commit somebody else published. True if it moved this member.
+   *
+   * False rather than an error for a commit already applied, because a backfill
+   * re-delivers every commit a channel ever had and a reconnect is the ordinary
+   * way to meet one. The epoch is the whole of the bookkeeping: below ours it is
+   * history, equal to ours it is the next step, above ours it is a commit we
+   * missed and cannot recover from — and that last one is reported as itself
+   * rather than left to surface later as an HPKE error on an ordinary message.
+   */
+  async applyCommit(event: NostrEvent, body: MlsCommitBody): Promise<boolean> {
+    const at = body.epoch
+    return this.serial(async () => {
+      const state = this.require()
+      const mine = epochNumber(state.groupContext.epoch)
+      if (at < mine) return false
+      if (at > mine) {
+        throw new MlsBindingError(
+          event.id,
+          `mls: this commit applies to epoch ${at} and this member is at ${mine}; ` +
+            'a commit was missed and the ratchet cannot be caught up — this member must be re-added',
+        )
+      }
+
+      const decoded = decodeMlsMessage(base64.decode(body.commit), 0)
+      if (decoded === undefined) {
+        throw new MlsBindingError(event.id, 'mls: the commit is not a decodable MLSMessage')
+      }
+      const [message] = decoded
+      if (message.wireformat !== 'mls_private_message') {
+        throw new MlsBindingError(
+          event.id,
+          `mls: expected a commit and got a ${message.wireformat}`,
+        )
+      }
+      // The same first binding as an application message, and it matters more
+      // here: a commit lifted from another channel would rewrite this group's
+      // membership rather than merely misfile a sentence.
+      if (!isMlsGroupId(message.privateMessage.groupId, this.deps.group)) {
+        throw new MlsBindingError(
+          event.id,
+          `mls: this commit names group_id "${new TextDecoder().decode(message.privateMessage.groupId)}" ` +
+            `and arrived in ${this.deps.group}`,
+        )
+      }
+
+      const result = await processPrivateMessage(
+        state,
+        message.privateMessage,
+        makePskIndex(state, {}),
+        this.deps.ciphersuite,
+      )
+      if (result.kind === 'applicationMessage') {
+        throw new MlsBindingError(event.id, 'mls: this event carries a body, not a commit')
+      }
+      await this.commit(result.newState)
+      return true
     })
   }
 

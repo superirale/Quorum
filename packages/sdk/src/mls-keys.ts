@@ -46,6 +46,7 @@ import { bytesToHex } from '@noble/hashes/utils.js'
 import { base64 } from '@scure/base'
 import {
   BorrowedKinds,
+  MlsCommitBody,
   MlsInvite,
   MlsWelcomeBody,
   RegularKinds,
@@ -251,9 +252,11 @@ async function readKeyPackage(
   return { event, keyPackage, pubkey: claimed }
 }
 
-/** What an invitation produced: the Welcome events, and the epoch they lead to. */
+/** What an invitation produced: the commit, the Welcome events, and the epoch they lead to. */
 export interface MlsInvitation {
   epoch: number
+  /** The kind 8112 every existing member needs in order to follow the group. */
+  commit: NostrEvent
   welcomes: NostrEvent[]
 }
 
@@ -269,14 +272,16 @@ export interface MlsInvitation {
  * is for them without decrypting, which on a channel with a hundred members is
  * ninety-nine wasted trial decryptions per invitation.
  *
- * **The order is ratchet-first, publish-second, and a crash in the gap costs the
- * invitee their invitation rather than the channel its integrity.** The commit
- * has already moved the group to a new epoch by the time the first Welcome is
- * published; if the process dies before the last one goes out, the missed member
- * is in the tree, cannot read anything, and has to be removed and re-added. The
- * alternative — publish the Welcomes first — would mean handing out entry to an
- * epoch the group never actually moved to, which is unrecoverable in the other
- * direction because the recipient's KeyPackage is spent either way.
+ * **Three writes in a fixed order: the commit, the ratchet, then the Welcomes.**
+ * The commit goes out first because the delivery service is what decides whether
+ * this member's commit is the group's next epoch at all — see
+ * {@link MlsCrypto.add}. The Welcomes go out last because the group must have
+ * actually moved before anyone is handed a way in: publishing them first would
+ * hand out entry to an epoch that may never exist, which is unrecoverable,
+ * because the recipient's KeyPackage is spent either way. A crash between the
+ * ratchet and the last Welcome costs the missed invitee their invitation — they
+ * are in the tree, can read nothing, and must be removed and re-added — which is
+ * the cheapest of the three failures and the only one that is recoverable.
  */
 export async function inviteToMls(options: {
   publisher: Publisher
@@ -288,8 +293,22 @@ export async function inviteToMls(options: {
   const { publisher, signer, crypto, group, packages } = options
   if (packages.length === 0) return undefined
 
-  const welcome = await crypto.add(packages.map((p) => p.keyPackage))
-  if (welcome === undefined) return undefined
+  let commit: NostrEvent | undefined
+  const welcome = await crypto.add(
+    packages.map((p) => p.keyPackage),
+    async (message, at) => {
+      commit = await publisher.publish({
+        kind: RegularKinds.MlsCommit,
+        group,
+        body: {
+          epoch: at,
+          commit: base64.encode(message),
+          adds: packages.map((p) => p.pubkey),
+        } satisfies MlsCommitBody,
+      })
+    },
+  )
+  if (welcome === undefined || commit === undefined) return undefined
 
   const invite: MlsInvite = {
     welcome: base64.encode(encodeMlsMessage({ version: MLS10, wireformat: 'mls_welcome', welcome })),
@@ -315,7 +334,78 @@ export async function inviteToMls(options: {
     )
   }
 
-  return { epoch, welcomes }
+  return { epoch, commit, welcomes }
+}
+
+/**
+ * Commits published to this channel, oldest first.
+ *
+ * Sorted by the epoch in the body rather than by `created_at` or by arrival,
+ * for the reason the M4 action chain was sorted by its `e`-tags: the ordering
+ * that decides whether state advances must not be a field the publisher picks.
+ * A relay also serves a filter newest-first, so the arrival order is the
+ * reverse of the order these must be applied in — which would fail as
+ * "a commit was missed" on the very first one.
+ *
+ * Two commits at one epoch are settled by event id, low first. The workspace
+ * relay will not store the second one, so this only ever arises on a generic
+ * relay carrying the channel — and there the tiebreak's job is to make every
+ * reader pick the *same* winner, not to pick the right one. Whoever loses has
+ * already advanced its own ratchet and is stranded either way.
+ */
+export async function fetchMlsCommits(client: RelayClient, group: string): Promise<NostrEvent[]> {
+  const events = await client.query([
+    { kinds: [RegularKinds.MlsCommit], '#h': [group], limit: 500 },
+  ])
+  // A commit nobody can parse is dropped rather than thrown on. It is not
+  // addressed to this reader in particular, every member meets it, and one
+  // malformed 8112 — which anyone at all can publish onto a generic relay
+  // carrying the channel — that halted catch-up would take the channel down for
+  // every member at once.
+  const rows: { event: NostrEvent; epoch: number }[] = []
+  for (const event of events) {
+    const body = commitBody(event)
+    if (body !== undefined) rows.push({ event, epoch: body.epoch })
+  }
+  rows.sort((a, b) => a.epoch - b.epoch || (a.event.id < b.event.id ? -1 : 1))
+  return rows.map((row) => row.event)
+}
+
+/** The body of an 8112, or `undefined` if this event is not a readable one. */
+function commitBody(event: NostrEvent): MlsCommitBody | undefined {
+  try {
+    return MlsCommitBody.parse(JSON.parse(event.content))
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Apply every commit this member has not yet seen. Returns how many advanced the group.
+ *
+ * This is what a member calls on start and after a reconnect, and it is the
+ * only reason an `mls` channel survives its third member. Commits already
+ * applied are skipped silently — a backfill re-serves them and re-applying one
+ * is not an error but the normal case.
+ *
+ * A commit for an epoch *ahead* of this member throws, and that is the honest
+ * answer rather than a gap: MLS has no way to catch up a ratchet across a
+ * commit it never held, so the member must be removed and re-added. Catching it
+ * here means the channel says so once, rather than every subsequent message
+ * failing to decrypt with `CryptoError: OperationError` from four frames inside
+ * a library nobody in this repo wrote.
+ */
+export async function catchUpMls(
+  client: RelayClient,
+  crypto: MlsCrypto,
+  group: string,
+): Promise<number> {
+  let applied = 0
+  for (const event of await fetchMlsCommits(client, group)) {
+    const body = commitBody(event)
+    if (body !== undefined && (await crypto.applyCommit(event, body))) applied += 1
+  }
+  return applied
 }
 
 /** Welcomes addressed to this identity in this channel, newest first. */

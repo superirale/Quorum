@@ -206,6 +206,14 @@ describe('mustSeal', () => {
     assert.ok(!mustSeal(BorrowedKinds.MlsKeyPackage))
     assert.ok(!mustSeal(RegularKinds.MlsWelcome))
 
+    // The commit is on the list for a different reason and is named here for
+    // the same one. Sealing it would wrap an MLS PrivateMessage in an MLS
+    // application message of the group it is advancing — and a member who
+    // missed the previous commit could not open the envelope carrying the
+    // commit they need, which is the one shape of deadlock this kind exists to
+    // avoid.
+    assert.ok(!mustSeal(RegularKinds.MlsCommit))
+
     // And the pair that came off the list when the Welcome stopped being a
     // NIP-59 gift wrap. Quorum publishes neither, so leaving them on would have
     // been the same prose-versus-table drift pointing the other way.
