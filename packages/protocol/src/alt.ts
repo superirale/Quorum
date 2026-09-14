@@ -148,6 +148,10 @@ function threadOpAlt(b: Record<string, any>): string {
       return `Retitled: ${b.title}`
     case 'set_budget':
       return 'Budget updated'
+    case 'add_spend':
+      // No amount. `alt` is plaintext even where the body is not, and what a
+      // task is costing is a number somebody would rather not broadcast.
+      return 'Spend reported'
     default:
       return 'Thread updated'
   }

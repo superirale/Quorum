@@ -101,6 +101,46 @@
         "op",
         "budget"
       ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "const": "add_spend"
+        },
+        "cost": {
+          "type": "object",
+          "properties": {
+            "tokens_in": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tokens_out": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "usd": {
+              "type": "number",
+              "minimum": 0
+            },
+            "msat": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "cost"
+      ]
     }
   ],
   "title": "ThreadOp body (kind 8109)"

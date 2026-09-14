@@ -46,6 +46,25 @@ export const ThreadOpBody = z.discriminatedUnion('op', [
   z.object({ op: z.literal('assign'), assignee: Pubkey.nullable() }),
   z.object({ op: z.literal('set_title'), title: z.string().min(1) }),
   z.object({ op: z.literal('set_budget'), budget: Budget }),
+
+  /**
+   * Report what has just been spent on this thread. Added to `spent`, never
+   * assigned — an op says what this turn cost, not what the total now is.
+   *
+   * This is the only path into `spent`, and an action's `cost` field does not
+   * feed it. The two would otherwise be a running total computed two ways from
+   * overlapping evidence, and a client that emitted both would double-count.
+   * The SDK publishes one of these after a terminal action, which is how the
+   * action's cost reaches the total: through the same op every other spend uses.
+   *
+   * An agent reporting its own spend can under-report it, and nothing here
+   * prevents that. What it buys is that spending is *stated* rather than
+   * estimated by a relay, so the total is auditable by replay like every other
+   * part of the projection, and it works unchanged on a channel the relay
+   * cannot read. The dishonest-agent case is what capabilities and revocation
+   * are for; an agent nobody should trust with a budget should not hold one.
+   */
+  z.object({ op: z.literal('add_spend'), cost: Cost, note: z.string().optional() }),
 ])
 export type ThreadOpBody = z.infer<typeof ThreadOpBody>
 

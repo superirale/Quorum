@@ -478,6 +478,90 @@ describe('the envelope', () => {
   })
 })
 
+describe('interrupts and spend', () => {
+  test('an action-scoped interrupt must name the action it stops', () => {
+    // The default scope is `action`, so this is the shape you get by forgetting
+    // — and it is the ambiguous one: an agent reading it cannot tell whether
+    // "stop" meant this action or everything in the thread.
+    const event = stub(
+      build({
+        kind: EphemeralKinds.Interrupt,
+        pubkey: ADA,
+        group: GROUP,
+        thread: THREAD,
+        body: { mode: 'cancel', reason: 'wrong version' },
+      }),
+    )
+    assert.ok(errorCodes(event).includes('missing_action_tag'))
+  })
+
+  test('naming the action, or scoping to the thread, both pass', () => {
+    const named = stub(
+      build({
+        kind: EphemeralKinds.Interrupt,
+        pubkey: ADA,
+        group: GROUP,
+        thread: THREAD,
+        action: fixture.action,
+        body: { mode: 'cancel' },
+      }),
+    )
+    assert.deepEqual(errorCodes(named), [])
+
+    const whole = stub(
+      build({
+        kind: EphemeralKinds.Interrupt,
+        pubkey: ADA,
+        group: GROUP,
+        thread: THREAD,
+        body: { mode: 'pause', scope: 'thread', reason: 'stop, all of it' },
+      }),
+    )
+    assert.deepEqual(errorCodes(whole), [])
+  })
+
+  test('a steer with no instruction warns', () => {
+    const event = stub(
+      build({
+        kind: EphemeralKinds.Interrupt,
+        pubkey: ADA,
+        group: GROUP,
+        thread: THREAD,
+        action: fixture.action,
+        body: { mode: 'steer' },
+      }),
+    )
+    const result = validateEvent(event)
+    assert.ok(result.valid, 'a vague steer is not worth rejecting')
+    assert.ok(result.issues.some((i) => i.code === 'steer_without_instruction'))
+  })
+
+  test('add_spend is a thread op like any other', () => {
+    const event = stub(
+      build({
+        kind: RegularKinds.ThreadOp,
+        pubkey: BOT,
+        group: GROUP,
+        thread: THREAD,
+        counter: 1,
+        body: { op: 'add_spend', cost: { tokens_in: 8200, tokens_out: 410 }, note: 'one turn' },
+      }),
+    )
+    assert.deepEqual(errorCodes(event), [])
+  })
+
+  test('its alt carries no amount', () => {
+    // `alt` is plaintext even where the body is not, and a running total is
+    // exactly the kind of number a workspace would rather not broadcast.
+    const alt = defaultAlt(RegularKinds.ThreadOp, {
+      op: 'add_spend',
+      cost: { usd: 412.5 },
+    })
+    assert.equal(alt, 'Spend reported')
+    assert.ok(!alt.includes('412'))
+  })
+})
+
 describe('the golden transcript', () => {
   test('every event verifies', () => {
     for (const event of fixture.events) {

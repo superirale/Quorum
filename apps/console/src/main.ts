@@ -24,6 +24,7 @@ import { approve, deny, inboxCommand } from './commands/approvals.ts'
 import { grantCommand, grantsCommand, revokeCommand } from './commands/grants.ts'
 import { keygen, use, whoami } from './commands/identity.ts'
 import { say, watch } from './commands/messages.ts'
+import { budget, stop, tasks } from './commands/tasks.ts'
 import { workspace } from './commands/workspace.ts'
 import { bold, dim, red } from './format.ts'
 
@@ -40,6 +41,9 @@ const COMMANDS: Record<string, (args: ParsedArgs) => Promise<void>> = {
   approve,
   deny,
   watch,
+  tasks,
+  budget,
+  stop,
   audit,
   export: exportEvents,
 }
@@ -111,6 +115,17 @@ ${bold('conversation')}
   say <text> --to <who>      start a thread addressed to someone
       --title <t>
   watch                      tail the group as events arrive
+
+${bold('tasks, cost and stopping')}
+  tasks                      every thread, its status and what it has spent
+  budget <thread>            show the ceiling ${dim('(id prefixes are fine)')}
+      --tokens n --usd n     set it; 0 is a freeze
+      --none                 remove it
+  stop <thread>              interrupt whatever is running ${dim('(ephemeral — nothing stores it)')}
+      --action <id>          just that one action
+      --pause                pause instead of cancel
+      --steer "<text>"       send an instruction; the agent decides
+      --reason <r>
 
 ${bold('approvals')}
   inbox [--all]              what is waiting on me

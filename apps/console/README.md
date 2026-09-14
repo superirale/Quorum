@@ -180,6 +180,25 @@ mid-flight.
 | `inbox [--all]` | approval requests addressed to you and still open |
 | `approve <id> [--set k=v]` · `deny <id> [--reason r]` | sign a decision |
 | `audit [--thread <id>]` · `export <file>` | verify, and take the evidence elsewhere |
+| `tasks` | what is being worked on, with status and what it has cost against its ceiling |
+| `budget <id> [--tokens n\|--usd n\|--none]` | read a ceiling, set one, or clear it |
+| `stop <id> [--action <id>] [--reason r]` | kind 28101: abort what is running now. `--pause`, or `--steer "<text>"` |
+
+Those last three are one screen used in that order, at speed, by somebody who has just noticed a
+number going up. Two things about them are worth stating rather than discovering:
+
+`budget --tokens 0` is a freeze, not a no-op. At the ceiling counts as exhausted, so zero stops
+the thread on the next fold using a capability that already exists. *Clearing* a ceiling needs
+`--none`, deliberately not spelt `--tokens ''` — removing a limit is a different decision from
+lowering one and should not be one keystroke away from it. And raising a ceiling does not resume
+a paused thread; that is a separate `set_status`, because "may continue" and "may spend more"
+are different questions.
+
+`stop` is the only time-critical command here, and the only one whose success message includes a
+caveat every time: **nothing stores an interrupt.** There is no OK from a relay that means an
+agent heard it. If nothing was running, nothing was stopped, and the console says so rather than
+letting an operator walk away from a deploy that is still going. A `--steer` is delivered to the
+agent as untrusted text and is never applied automatically.
 
 `--as <name>` signs as another saved identity for one command. `--relay` and `--group` override
 the saved defaults; both are folded into the environment on the way in, so there is one
@@ -195,10 +214,12 @@ taken back from.
 pnpm --filter @quorum/console test
 ```
 
-34 tests over the parts where being wrong is quiet: argument parsing and `--set` edits
+41 tests over the parts where being wrong is quiet: argument parsing and `--set` edits
 (`args.test.ts`), what counts as waiting on you (`inbox.test.ts`), key file permissions and
-path traversal (`config.test.ts`), and what a grant listing claims a capability covers
-(`grants.test.ts`).
+path traversal (`config.test.ts`), what a grant listing claims a capability covers
+(`grants.test.ts`), and prefix matching for `stop` (`tasks.test.ts`) — where `quorum stop 4b`
+picking one of two candidates would stop the wrong deploy silently, in the one command nobody is
+reading carefully.
 
 Everything that talks to a relay is left to the integration suites in `examples/`, which run
 against the real Go relay — a mocked socket would only assert that the mock behaves as this

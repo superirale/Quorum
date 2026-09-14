@@ -27,7 +27,7 @@ import {
 } from '@quorum/protocol'
 import type { PublishOptions } from '../src/publish.ts'
 import { LocalSigner } from '../src/signer.ts'
-import { foldOps, thread as findThread, threadOp, threads } from '../src/threads.ts'
+import { foldOps, thread as findThread, threadOp, threadState, threads } from '../src/threads.ts'
 
 const GROUP = 'payments'
 const NOW = 1_800_000_000
@@ -73,7 +73,8 @@ async function projection(options: {
   status: ThreadStatus
   title?: string
   assignee?: string
-  budget?: { usd?: number }
+  budget?: { usd?: number; tokens?: number }
+  spent?: { usd?: number; tokens_in?: number; tokens_out?: number }
   foldedFrom: readonly NostrEvent[]
   signer?: LocalSigner
 }): Promise<NostrEvent> {
@@ -90,6 +91,7 @@ async function projection(options: {
         ...(options.title !== undefined ? { title: options.title } : {}),
         ...(options.assignee !== undefined ? { assignee: options.assignee } : {}),
         ...(options.budget !== undefined ? { budget: options.budget } : {}),
+        ...(options.spent !== undefined ? { spent: options.spent } : {}),
         folded_from: options.foldedFrom.map((e) => e.id),
         updated_at: NOW,
       },
@@ -412,6 +414,162 @@ describe('threadOp', () => {
     assert.equal(options.counter, undefined)
     const event = await sign({ ...options, counter: 7 })
     assert.equal(tagValue(event.tags, TagName.Counter), '7')
+  })
+})
+
+/**
+ * Budgets, and the two things that have to be true about them.
+ *
+ * One: the spend is a sum of ops, so a relay that states a different total is
+ * caught by addition — which it was not before M8, because nothing folded into
+ * `spent` and a replay had nothing to compare.
+ *
+ * Two: the auto-pause has to be computed identically here and in Go. If it is
+ * not, the relay pauses a thread, signs a projection saying so, and this file
+ * replays the same ops, gets `working`, and calls an honest relay a liar. Every
+ * test below that asserts `agrees` is really a test of that parity.
+ */
+describe('budgets', () => {
+  it('adds spend ops rather than replacing the total', async () => {
+    const first = await op(bot, { op: 'add_spend', cost: { tokens_in: 100, tokens_out: 50 } })
+    const second = await op(bot, { op: 'add_spend', cost: { tokens_in: 10, tokens_out: 5 } })
+    const found = one([root, first, second])
+    assert.deepEqual(found.spent, { tokens_in: 110, tokens_out: 55 })
+    assert.equal(found.status, 'open')
+  })
+
+  it('pauses the thread when the spend reaches the ceiling', async () => {
+    const events = [
+      root,
+      await op(ada, { op: 'set_budget', budget: { tokens: 150 } }),
+      await op(bot, { op: 'set_status', status: 'working' }),
+      await op(bot, { op: 'add_spend', cost: { tokens_in: 100, tokens_out: 60 } }),
+    ]
+    const found = one(events)
+    assert.equal(found.status, 'paused')
+  })
+
+  it('counts both halves of a token spend against one ceiling', async () => {
+    // The overspend that hides: 90 in and 90 out is 180 against a cap of 150,
+    // and looks comfortably inside it from either column on its own.
+    const events = [
+      root,
+      await op(ada, { op: 'set_budget', budget: { tokens: 150 } }),
+      await op(bot, { op: 'add_spend', cost: { tokens_in: 90 } }),
+      await op(bot, { op: 'add_spend', cost: { tokens_out: 90 } }),
+    ]
+    assert.equal(one(events).status, 'paused')
+  })
+
+  it('pauses immediately when a budget is set below what is already spent', async () => {
+    const events = [
+      root,
+      await op(bot, { op: 'set_status', status: 'working' }),
+      await op(bot, { op: 'add_spend', cost: { usd: 4 } }),
+      await op(ada, { op: 'set_budget', budget: { usd: 1 } }),
+    ]
+    assert.equal(one(events).status, 'paused')
+  })
+
+  it('lets a human resume an exhausted thread, and re-pauses on the next spend', async () => {
+    // Resuming buys the agent one more turn, not a new ceiling. A `set_status`
+    // must never re-trigger the pause or the resume could not be published at
+    // all; the next `add_spend` is what puts it back.
+    const base = [
+      root,
+      await op(ada, { op: 'set_budget', budget: { usd: 1 } }),
+      await op(bot, { op: 'add_spend', cost: { usd: 1 } }),
+    ]
+    assert.equal(one(base).status, 'paused')
+
+    const resumed = [...base, await op(ada, { op: 'set_status', status: 'working' })]
+    assert.equal(one(resumed).status, 'working')
+
+    const spentAgain = [...resumed, await op(bot, { op: 'add_spend', cost: { usd: 0.01 } })]
+    assert.equal(one(spentAgain).status, 'paused')
+  })
+
+  it('does not un-finish a done thread with a late spend report', async () => {
+    const events = [
+      root,
+      await op(ada, { op: 'set_budget', budget: { usd: 1 } }),
+      await op(bot, { op: 'set_status', status: 'done' }),
+      await op(bot, { op: 'add_spend', cost: { usd: 9 } }),
+    ]
+    const found = one(events)
+    assert.equal(found.status, 'done')
+    assert.deepEqual(found.spent, { usd: 9 })
+  })
+
+  it('agrees with a relay that paused the thread the same way', async () => {
+    const budget = await op(ada, { op: 'set_budget', budget: { usd: 1 } })
+    const spend = await op(bot, { op: 'add_spend', cost: { usd: 2 } })
+    const found = one([
+      root,
+      budget,
+      spend,
+      await projection({
+        status: 'paused',
+        budget: { usd: 1 },
+        spent: { usd: 2 },
+        foldedFrom: [budget, spend],
+      }),
+    ])
+    assert.deepEqual(found.check, { verdict: 'agrees' })
+    assert.equal(found.status, 'paused')
+  })
+
+  it('catches a relay that inflates what a thread has spent', async () => {
+    // The lie this check exists for. Every op is present, so there is no
+    // innocent reading: the total is not the sum of the things it names.
+    const spend = await op(bot, { op: 'add_spend', cost: { usd: 2 } })
+    const found = one([
+      root,
+      spend,
+      await projection({ status: 'open', spent: { usd: 200 }, foldedFrom: [spend] }),
+    ])
+    assert.deepEqual(found.check, { verdict: 'disagrees', fields: ['spent'] })
+    assert.deepEqual(found.spent, { usd: 2 })
+  })
+
+  it('treats an absent dimension and a zero one as different claims', async () => {
+    // "Nobody said" is not "it was free". A relay quietly turning the first into
+    // the second would let `{}` and `{usd: 0}` sign for each other.
+    const spend = await op(bot, { op: 'add_spend', cost: { tokens_in: 5 } })
+    const found = one([
+      root,
+      spend,
+      await projection({
+        status: 'open',
+        spent: { tokens_in: 5, usd: 0 },
+        foldedFrom: [spend],
+      }),
+    ])
+    assert.deepEqual(found.check, { verdict: 'disagrees', fields: ['spent'] })
+  })
+})
+
+describe('threadState', () => {
+  it('answers without the thread root, which an agent will not have fetched', async () => {
+    const budget = await op(ada, { op: 'set_budget', budget: { usd: 5 } })
+    const spend = await op(bot, { op: 'add_spend', cost: { usd: 1 } })
+    const state = threadState([budget, spend], root.id)
+    assert.deepEqual(state.budget, { usd: 5 })
+    assert.deepEqual(state.spent, { usd: 1 })
+    assert.equal(state.status, 'open')
+  })
+
+  it('applies ops the relay has not folded on top of the projection', async () => {
+    const first = await op(bot, { op: 'add_spend', cost: { usd: 1 } })
+    const projected = await projection({ status: 'open', spent: { usd: 1 }, foldedFrom: [first] })
+    const second = await op(bot, { op: 'add_spend', cost: { usd: 2 } })
+    const state = threadState([first, projected, second], root.id)
+    assert.deepEqual(state.spent, { usd: 3 })
+  })
+
+  it('reads a thread nobody has managed as open with no ceiling', async () => {
+    const state = threadState([], root.id)
+    assert.deepEqual(state, { status: 'open' })
   })
 })
 

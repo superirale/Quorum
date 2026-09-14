@@ -238,6 +238,78 @@ coordination one. A relay implementing this NIP SHOULD require a `thread:budget`
 capability for `set_budget` and leave the other ops open to members. See
 [the two resources the relay owns](#the-two-resources-the-relay-owns).
 
+### Budgets and spend
+
+A thread's `spent` is the sum of its `add_spend` ops and **nothing else**. An
+action body MAY also carry a `cost`, and that field is audit detail — what one
+turn cost — which MUST NOT be folded into `spent`. An implementation that counts
+both doubles every number in the workspace.
+
+Spend is therefore **stated by the party that spent it**, never estimated by a
+reader. That is what lets the mechanism survive encryption unchanged: on a
+`nip44` or `mls` channel the relay cannot read a token count out of a message,
+but an agent can still publish what it spent.
+
+Costs and budgets are stated in different units and the conversion is part of
+the rule. A `Cost` has `tokens_in`, `tokens_out`, `usd` and `msat`; a `Budget`
+has `tokens`, `usd` and `msat`. **Both token halves count against `tokens`.**
+Comparing either column on its own is how an overspend hides: a thread capped at
+30,000 tokens that has spent 29,000 in and 28,000 out is nearly twice over and
+looks fine from either side.
+
+An absent dimension MUST stay absent when costs are summed. `{}` and `{usd: 0}`
+are different claims — "nobody said" and "it was free" — and a thread reporting
+spend in tokens must not grow a `usd: 0` that reads as a priced total.
+
+A budget is **exhausted** when any stated ceiling is reached:
+
+- a budget with no dimensions set is not a budget. `{}` means nobody has capped
+  this thread and MUST NOT be read as a ceiling of zero.
+- any one dimension is enough. Whoever set two ceilings meant both.
+- **at the ceiling is exhausted, not under it** — `>=`. This is deliberate, and
+  it is what makes `set_budget {usd: 0}` an immediate freeze on a thread somebody
+  wants stopped now, using a capability that already exists rather than a verb
+  nobody has implemented.
+
+### Pausing an exhausted thread
+
+Whoever folds the ops — relay or client — MUST set `status` to `paused` when the
+folded state is exhausted, subject to three rules that are each load-bearing:
+
+1. **Only while folding `add_spend` or `set_budget`.** Never while folding
+   `set_status`, or a human resuming an exhausted thread would have their
+   `working` rewritten to `paused` by the same fold that stored it, and the
+   thread could never be reopened.
+2. **Never on a thread whose status is `done`.** A spend report arriving late
+   must not un-finish delivered work.
+3. **It only ever sets `paused`.** Folding a *higher* ceiling over an exhausted
+   thread does not resume it.
+
+The consequence of rule 3 is the one to state plainly: **resuming and raising are
+two decisions and take two ops.** `set_status` clears the pause; `set_budget`
+clears the reason for it. They are separated because "this task may continue" and
+"this task may spend more" are different questions with different answers, and
+only the second is an authority decision.
+
+A relay implementing this NIP SHOULD refuse a kind 8101 whose status is
+`proposed` or `running` in a paused thread, and MUST NOT refuse anything else
+there. Chat, comments, thread ops and the **terminal** transitions of an action
+already running (`succeeded`/`failed`/`denied`/`cancelled`) all have to get
+through: a paused thread that cannot close its running action loses the record of
+work that happened, and a relay that silenced the thread it had just paused would
+turn a budget alert into an outage in the one thread people need to talk in.
+
+Agents SHOULD check the budget *before* publishing a `proposed`, and report the
+refusal to the humans on the thread rather than to the relay. A rejected publish
+raises inside a handler, a raise inside a handler is replayed, and a replay
+against a relay that will refuse it every time turns a budget stop into a retry
+loop against the thing trying to stop it.
+
+Finally, an implementation MUST expect the total to exceed the ceiling. Spend is
+reported after the fact, so **a budget is a stop sign at the next junction, not a
+brake**: the action already running finishes and reports. An implementation that
+discarded the overrun would be paying agents to be stopped.
+
 ## Actions
 
 There is deliberately no `tool_call`/`tool_result` pair. A relay does not run
@@ -416,6 +488,61 @@ grantee still cannot get in.
 **intersection** of the agent's grant and that human's own permissions, never the
 union. Without this rule, "give the agent admin so it can help" is the only
 workable pattern.
+
+## Interrupts
+
+A budget stops an agent nobody is watching. An `interrupt` (28101) stops one
+somebody is. Every other control in this NIP is a decision made *before* work
+starts — a capability, an approval, a ceiling — and this is the one made while it
+is running, by the person who has just realised one of the others was wrong.
+
+The body carries `mode` (`cancel`/`pause`/`steer`), `scope`
+(`action`/`thread`), an optional `reason` and, for `steer`, an `instruction`.
+An action-scoped interrupt MUST carry an `action` tag naming the action it stops;
+a thread-scoped one stops everything the receiving agent is running in that
+thread. Implementations SHOULD infer `scope` from whether an action was named
+rather than defaulting it, because the two mistakes are asymmetric: an
+action-scoped interrupt with no action tag stops nothing, while a thread-scoped
+one sent by someone who meant "this one action" stops more than they asked for.
+
+**Any member of the group may publish one**, deliberately not only the agent's
+operator or the thread's approvers. Stopping is the safe direction — the worst
+outcome of an unnecessary cancel is that work has to be re-proposed, and any
+member can already publish `set_status: paused` — and a control only two people
+may use is a control nobody uses in the ten seconds that matter.
+
+An agent receiving a `cancel` or `pause` for an action it is running MUST abort
+the effect and close the chain with a terminal `cancelled` event, **not**
+`failed`. A job that broke and a job a human stopped are different facts that
+send different people to different screens, and nothing downstream can recover
+the distinction once it is lost. `pause` aborts exactly as `cancel` does; the
+difference lives in the thread's status, which a human sets and a human clears.
+There is no state in which an agent holds a half-finished effect in memory
+waiting to be resumed, because that state does not survive the restart coming
+for it.
+
+A `steer` MUST NOT abort anything and its `instruction` MUST NOT be applied
+automatically. It is handed to the handler as untrusted text, exactly like a
+message from a stranger, because an instruction that redirects a running action
+is prompt injection with a kind number.
+
+An interrupt naming an action the receiver is not running matches nothing, and
+the receiver SHOULD be silent about it. In a channel with several agents that is
+the normal case, and every agent logging every interrupt it ignored buries the
+one line that matters.
+
+### There is no receipt, and interfaces must say so
+
+28101 is ephemeral, so nothing stores it and there is no event to query
+afterwards. An interrupt published while the agent is down is simply missed —
+correct, since the action it was cancelling is not running either, and the
+handler will be replayed from the top where a fresh interrupt can catch it.
+
+The consequence is a rule about interfaces rather than about events: **a relay's
+OK for a 28101 never means an agent heard it.** It means the relay routed it to
+whoever was subscribed. Any client offering a Stop button MUST say so on the
+screen, because the alternative is a human who believes a production action was
+cancelled watching it complete.
 
 ## Leases
 
@@ -859,8 +986,20 @@ addressing this.
 Addressing plus a channel policy defaulting to `respond_only_when_addressed`
 removes most runaway agent-to-agent chatter structurally. Causal-chain depth — the
 tempting mechanism — is trivially defeated by A→B→A alternation and SHOULD NOT be
-relied on. Backstops: per-thread budgets (exhaustion → `paused` → ping a human)
-and per-principal rate limits.
+relied on.
+
+Two backstops catch what structure does not. **A per-thread budget** bounds the
+work rather than the message rate, and the thing it bounds is the thing anybody
+actually cares about: exhaustion pauses the thread and pings a human, and the
+relay then refuses new work in it. See [budgets and spend](#budgets-and-spend).
+**Per-principal rate limits** bound the traffic.
+
+They are not redundant and they are not interchangeable. A rate limit fires
+first, because it is counted per event and a busy agent emits several per unit of
+work; it is also the blunter of the two, since it cannot distinguish an agent
+looping from an agent working hard. A budget is the one a human can reason about
+and raise. An implementation that ships only the rate limit has a workspace where
+the runaway agent and the productive one are throttled identically.
 
 Stated policy: **there are no private agent backchannels.** Agent-to-agent DMs are
 default-deny, require an explicit grant, and are readable by the workspace owner

@@ -61,6 +61,7 @@ import {
   type Risk,
 } from '@quorum/protocol'
 import type { Logger, RelayClient } from './client.ts'
+import type { Interrupts } from './interrupt.ts'
 import type { Once } from './once.ts'
 import type { PublishOptions } from './publish.ts'
 
@@ -313,7 +314,16 @@ export interface ActRun {
   readonly attempt: number
   /** The digest the approvers signed over. Worth logging with the effect. */
   readonly inputDigest: string
-  /** Set this and it lands on the terminal action event. */
+  /**
+   * Aborted when somebody publishes an interrupt for this action or its thread.
+   *
+   * Pass it to `fetch`, to a child process, to anything that takes one. An
+   * effect that ignores it cannot be stopped, and the Stop button in the client
+   * becomes a button that says "stop" and does nothing — which is worse than
+   * not having one, because somebody will press it and walk away.
+   */
+  readonly signal: AbortSignal
+  /** Set this and it lands on the terminal action event and the thread's spend. */
   cost?: Cost
 }
 
@@ -350,6 +360,12 @@ export interface ActOptions<I, T> {
 export type ActResult<T> =
   | { status: 'succeeded'; actionId: string; output: T; input: unknown; approvals: NostrEvent[] }
   | { status: 'denied'; actionId: string; reason: string; approvals: NostrEvent[] }
+  /**
+   * Nobody approved it, somebody interrupted it, or the thread had no budget
+   * left. In that last case `actionId` is empty: the action was refused before
+   * it was proposed, so there is no chain to name — which is the point, since
+   * proposing it is the thing the relay would have rejected.
+   */
   | { status: 'cancelled'; actionId: string; reason: string; approvals: NostrEvent[] }
   | {
       status: 'failed'
@@ -371,6 +387,25 @@ export interface ActDeps {
   log: Logger
   /** Overridable so tests do not wait on a wall clock. */
   now?: () => number
+
+  /**
+   * Is there budget left in this thread? Checked before anything is proposed.
+   *
+   * A function rather than a value because the answer changes while the agent
+   * is working, and the check is worth nothing if it reads a number fetched
+   * when the handler started.
+   */
+  budget?: () => Promise<BudgetVerdict>
+  /** Arms an abort signal for the action. See `interrupt.ts`. */
+  interrupts?: Interrupts
+  /** Reports what the action cost to the thread's total, as an `add_spend` op. */
+  spend?: (label: string, cost: Cost, note: string) => Promise<unknown>
+}
+
+export interface BudgetVerdict {
+  exhausted: boolean
+  /** One line for the human, e.g. "spent 41,000/40,000 tokens". */
+  reason?: string
 }
 
 const DEFAULT_EXPIRY_SECONDS = 3600
@@ -398,6 +433,18 @@ export async function runAction<I, T>(
       `act('${options.name}') needs ${required} approvals but addresses ${approvers.length} ` +
         'approvers. A request nobody can satisfy would sit in the channel forever.',
     )
+  }
+
+  // Before anything is published. The relay refuses a `proposed` in a paused
+  // thread, and a rejected publish throws — inside a handler, that is an
+  // exception the agent replays, which turns a budget stop into a retry loop
+  // against a relay that will refuse it every time. Checking here turns the
+  // same stop into a terminal result the caller can read.
+  const verdict = await deps.budget?.()
+  if (verdict?.exhausted) {
+    const reason = verdict.reason ?? "this thread's budget is exhausted"
+    deps.log.warn(`[action] not proposing ${options.name}: ${reason}`)
+    return { status: 'cancelled', actionId: '', reason, approvals: [] }
   }
 
   const proposed = await deps.publish(`${label}/proposed`, {
@@ -531,21 +578,71 @@ async function execute<I, T>(
     },
   })
 
+  // Armed before the effect starts and released whatever happens: a controller
+  // left in the registry is an interrupt delivered to nobody, and a controller
+  // armed late is a Stop that arrives during the one second the action was
+  // being published and is silently dropped.
+  const armed = deps.interrupts?.register(actionId, deps.thread.id)
+
   // The effect records *both* outcomes in the ledger, which is why this catches
   // rather than letting the throw escape. If a failure were left unrecorded, a
   // replay would re-run the effect, and a run that succeeded the second time
   // would publish `succeeded` after `failed` — an illegal transition, and a
   // chain that says two contradictory things about the same action. A failed
   // action is terminal: retrying means proposing a new one.
-  const outcome = await deps.once(`${label}/run`, async ({ attempt }) => {
-    const run: ActRun = { actionId, attempt, inputDigest }
-    try {
-      const output = await options.run(input, run)
-      return { ok: true as const, output, cost: run.cost }
-    } catch (error) {
-      return { ok: false as const, error: toErrorDetail(error), cost: run.cost }
-    }
-  })
+  const outcome = await deps
+    .once(`${label}/run`, async ({ attempt }) => {
+      const run: ActRun = {
+        actionId,
+        attempt,
+        inputDigest,
+        signal: armed?.signal ?? neverAborts(),
+      }
+      try {
+        const output = await options.run(input, run)
+        return { ok: true as const, output, cost: run.cost, interrupted: false }
+      } catch (error) {
+        // An interrupted effect is cancelled, not failed. Recording it as a
+        // failure would say in the log that the deploy broke, when what
+        // happened is that a human stopped it — and those two sentences send
+        // very different people to very different screens at 3am.
+        return {
+          ok: false as const,
+          error: toErrorDetail(error),
+          cost: run.cost,
+          interrupted: armed?.signal.aborted ?? false,
+        }
+      }
+    })
+    .finally(() => armed?.release())
+
+  // The note names the action, because a task timeline showing six unexplained
+  // amounts is a bill with no line items — and the one question anybody asks of
+  // a thread that ran out of money is which part of it was expensive.
+  const reportSpend = async () => {
+    if (!outcome.cost || !deps.spend) return
+    await deps.spend(`${label}/spend`, outcome.cost, options.name)
+  }
+
+  if (!outcome.ok && outcome.interrupted) {
+    const reason = outcome.error.message
+    deps.log.warn(`[action] ${options.name} was interrupted: ${reason}`)
+    await deps.publish(`${label}/cancelled`, {
+      kind: Kinds.Action,
+      thread: deps.thread,
+      parent: refTo(running),
+      action: actionId,
+      body: {
+        name: options.name,
+        status: 'cancelled',
+        summary: options.summary,
+        output_summary: reason,
+        ...(outcome.cost ? { cost: outcome.cost } : {}),
+      },
+    })
+    await reportSpend()
+    return { status: 'cancelled', actionId, reason, approvals: state.approvals }
+  }
 
   if (!outcome.ok) {
     deps.log.error(`[action] ${options.name} failed: ${outcome.error.message}`)
@@ -562,6 +659,7 @@ async function execute<I, T>(
         ...(outcome.cost ? { cost: outcome.cost } : {}),
       },
     })
+    await reportSpend()
     return { status: 'failed', actionId, error: outcome.error, approvals: state.approvals }
   }
 
@@ -581,6 +679,12 @@ async function execute<I, T>(
       ...(outcome.cost ? { cost: outcome.cost } : {}),
     },
   })
+
+  // After the terminal event, never before it. A spend can exhaust the budget
+  // and pause the thread, and a paused thread must still be able to record what
+  // the work that exhausted it actually did — the alternative is a thread that
+  // paused with a `running` action in it and no way to close it.
+  await reportSpend()
 
   if (modified) {
     deps.log.warn(
@@ -686,6 +790,19 @@ function dedupe(values: readonly string[]): string[] {
 
 function short(hex: string): string {
   return hex.length > 12 ? `${hex.slice(0, 8)}…` : hex
+}
+
+/**
+ * The signal an effect gets when nothing can interrupt it.
+ *
+ * `ActRun.signal` is non-optional deliberately: an effect written to honour a
+ * signal should not have to write `run.signal?.aborted`, because the version of
+ * that line with the `?` still compiles when the signal is genuinely missing and
+ * silently never aborts. Handing over a signal that will not fire keeps the
+ * effect's code honest and puts the missing wiring in one place — here.
+ */
+function neverAborts(): AbortSignal {
+  return new AbortController().signal
 }
 
 function toErrorDetail(error: unknown): ErrorDetail {

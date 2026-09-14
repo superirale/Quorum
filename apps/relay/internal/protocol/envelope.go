@@ -162,6 +162,10 @@ func Group(event *nostr.Event) string { return firstTagValue(event, TagGroup) }
 // Parent returns the NIP-22 `e` tag: the id of what this event directly answers.
 func Parent(event *nostr.Event) string { return firstTagValue(event, TagEvent) }
 
+// RootEvent returns the NIP-22 `E` tag: the id of the kind 11 root, which is
+// also the thread id every 38101 is keyed by.
+func RootEvent(event *nostr.Event) string { return firstTagValue(event, TagRootEvent) }
+
 // ActionID returns the action chain an event belongs to, which is the id of the
 // chain's `proposed` event. Empty for a proposal, which names the chain by
 // being it, and for everything outside an action.

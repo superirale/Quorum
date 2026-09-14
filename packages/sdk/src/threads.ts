@@ -55,6 +55,8 @@ import {
   TagName,
   ThreadOpBody,
   ThreadStateBody,
+  addCost,
+  checkBudget,
   tagValue,
   type Budget,
   type Cost,
@@ -133,6 +135,40 @@ export function thread(events: readonly NostrEvent[], id: string): Thread | unde
 }
 
 /**
+ * A thread's mutable state, without needing its root.
+ *
+ * {@link threads} refuses to synthesise a thread it has no kind 11 for, and that
+ * is right for a task list: a row with no title and no author reads as a bug.
+ * But an agent about to spend money needs one question answered — *how much is
+ * left* — and it is already inside the thread, holding its id. Making it fetch
+ * a root it will not look at, in order to find out whether it may work, would be
+ * a query it pays for on every action and a failure mode where the budget check
+ * silently passes because the backfill window missed a two-year-old root.
+ *
+ * Takes whatever `events` contain: the 38101 keyed by `d` = `id`, and the 8109
+ * ops tagged `E` = `id`. Anything else is ignored. With neither, the answer is
+ * an open thread with no budget — which is what an unmanaged thread is.
+ */
+export function threadState(events: readonly NostrEvent[], id: string): Folded {
+  const inThread = (groupByRoot(events).get(id) ?? []).filter(
+    (e) => e.kind === Kinds.ThreadOp || e.kind === Kinds.ThreadState,
+  )
+  const ops = inThread
+    .filter((e) => e.kind === Kinds.ThreadOp)
+    .sort((a, b) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1))
+
+  const projection = latestProjection(inThread, id)
+  const body = projection && ThreadStateBody.safeParse(parse(projection.content))
+  const claimed = body?.success ? body.data : undefined
+
+  const { base, folded } = reconcile(claimed, ops)
+  return foldOps(
+    ops.filter((e) => !folded.has(e.id)),
+    base,
+  )
+}
+
+/**
  * Ask for a change to a thread's state.
  *
  * A request and not a write: the op is a kind 8109 the author signs, and what
@@ -147,9 +183,16 @@ export function thread(events: readonly NostrEvent[], id: string): Thread | unde
  *
  * Authority is not checked here and could not be. `set_budget` is gated by the
  * relay (`RequireGrantToSetBudget`) because a spending ceiling is authority
- * rather than coordination; the other three are coordination, and anyone in the
- * group may publish them. A client that pre-checked would only be guessing at a
+ * rather than coordination; the rest are coordination, and anyone in the group
+ * may publish them. A client that pre-checked would only be guessing at a
  * decision the relay makes.
+ *
+ * `add_spend` is deliberately ungated, and it is self-reported. An agent can
+ * under-report what it cost, and nothing here stops it — what the op buys is
+ * that the total is *stated* rather than estimated, so it is auditable by
+ * replay and works unchanged on a channel the relay cannot read. An agent that
+ * would lie about its own spend is an agent that should not hold a budget,
+ * which is what capabilities and revocation are for.
  */
 export function threadOp(root: EventRef, op: ThreadOpBody): PublishOptions {
   return { kind: Kinds.ThreadOp, thread: root, body: op }
@@ -194,10 +237,34 @@ export function foldOps(ops: readonly NostrEvent[], from?: Folded): Folded {
       case 'set_budget':
         state.budget = op.budget
         break
+      case 'add_spend':
+        state.spent = addCost(state.spent, op.cost)
+        break
     }
+
+    pauseIfExhausted(state, op.op)
   }
 
   return state
+}
+
+/**
+ * The budget's teeth, and the reason they are in the fold rather than beside
+ * it: the relay pauses an exhausted thread as part of folding, so a client that
+ * replayed `folded_from` without this rule would reproduce a different status
+ * and report a truthful relay as `disagrees`. The check that catches a lying
+ * relay only works if both sides compute the same thing.
+ *
+ * Fires only on the two ops that change the spend-to-ceiling relationship. A
+ * `set_status` must never trigger it, or a human could never resume an
+ * exhausted thread — their `working` would be rewritten to `paused` by the
+ * same fold that stored it. A `done` thread is left alone, because a late
+ * spend report must not un-finish delivered work.
+ */
+function pauseIfExhausted(state: Folded, op: ThreadOpBody['op']): void {
+  if (op !== 'add_spend' && op !== 'set_budget') return
+  if (state.status === 'paused' || state.status === 'done') return
+  if (checkBudget(state.spent, state.budget).exhausted) state.status = 'paused'
 }
 
 function derive(root: NostrEvent, inThread: readonly NostrEvent[]): Thread {
@@ -269,9 +336,13 @@ function reconcile(
  *
  * `updated_at` is excluded deliberately: it is the relay's own clock at fold
  * time, so no replay can reproduce it and comparing it would make every
- * projection look forged. `spent` is excluded because nothing folds into it —
- * it is written by the relay from usage the ops do not carry, so a replay has
- * nothing to say about it.
+ * projection look forged.
+ *
+ * `spent` is compared, and until M8 it could not be: nothing folded into it, so
+ * a replay had nothing to say. Now every increment arrives as an `add_spend` op
+ * in `folded_from`, which makes the total the one number in the projection a
+ * client can check by addition — and a relay inflating what a thread cost is a
+ * more tempting lie than a relay misstating its title.
  */
 function differences(ours: Folded, theirs: ThreadStateBody): string[] {
   const out: string[] = []
@@ -281,7 +352,20 @@ function differences(ours: Folded, theirs: ThreadStateBody): string[] {
   if (JSON.stringify(ours.budget ?? null) !== JSON.stringify(theirs.budget ?? null)) {
     out.push('budget')
   }
+  if (!sameCost(ours.spent, theirs.spent)) out.push('spent')
   return out
+}
+
+/**
+ * Dimension by dimension rather than by serialising, because the two sides are
+ * built by different languages: an absent dimension and a zero must compare
+ * unequal, but key order must not matter.
+ */
+function sameCost(ours: Cost | undefined, theirs: Cost | undefined): boolean {
+  for (const key of ['tokens_in', 'tokens_out', 'usd', 'msat'] as const) {
+    if ((ours?.[key] ?? null) !== (theirs?.[key] ?? null)) return false
+  }
+  return true
 }
 
 function asFolded(state: ThreadStateBody): Folded {

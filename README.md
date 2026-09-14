@@ -33,6 +33,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
 | [`examples/claude-agent`](examples/claude-agent) | A language model reading a workspace — 500 messages into a 20k budget, with the trust boundary visible |
 | [`examples/auditor`](examples/auditor) | Not an agent: a reader catching a relay that withholds an event, and proving it to a stranger |
+| [`examples/runaway-agent`](examples/runaway-agent) | An agent nobody is watching, stopped by a budget; one somebody is, stopped by a button |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -125,6 +126,28 @@ keeps the relay from accusing itself is that only *regular* events are committed
 addressable event is superseded and its id leaves the store, so a relay committing to a 38101
 would fail its own checkpoint the first time anyone changed a task's status.
 
+**M8** — the two controls that apply *after* work has started. Everything before this decides
+whether an agent may begin: a capability, an approval, a manifest. These two are what a human
+reaches for when one of those decisions turns out to have been wrong.
+
+A thread holds a spending ceiling. Every action reports what it cost as a signed op, the relay
+folds the ops into a total, and when the total reaches the ceiling the thread pauses itself —
+nobody publishes a status, and the relay then refuses to accept new work in it. The agent is
+told before it proposes anything, so a budget stop does not become a retry loop against a relay
+that will refuse it forever, and the human gets a message in their queue rather than a silent
+stall. Spend is *stated* by whoever spent it, never estimated by a reader, which is what lets
+the same mechanism work on a channel the relay cannot read.
+
+It overruns, and that is the honest part: a budget is a stop sign at the next junction, not a
+brake. The action already running finishes and reports, because an agent whose spend vanishes
+when it is stopped has an incentive to be stopped.
+
+Stop is the other direction. A kind 28101 is ephemeral — routed to whoever is listening, stored
+nowhere — and it aborts the `AbortSignal` the running effect is holding. The chain ends
+`cancelled`, never `failed`, because a job that broke and a job a human stopped send different
+people to different screens. There is no receipt and there cannot be one, so every Stop button
+in this repository says so on the screen rather than in the docs.
+
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
 ## Try it
@@ -138,8 +161,9 @@ pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: address
 pnpm --filter @quorum/claude-agent demo      # 500 messages into a 20k budget — no API key needed
 pnpm --filter @quorum/auditor demo           # a relay caught withholding, and the proof written out
 pnpm --filter @quorum/auditor verify         # the proof, checked by a program that trusts nothing
+pnpm --filter @quorum/runaway-agent demo     # an agent runs out of money; a human presses Stop
 
-pnpm check                                   # 455 tests: protocol 116, test-kit 17, sdk 269, console 34, web 19
+pnpm check                                   # 515 tests: protocol 132, test-kit 17, sdk 306, console 41, web 19
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -163,6 +187,12 @@ same pack computed twice to prove it is a function rather than a heuristic. It r
 what a model does with a fence is a real question and not one a demo can settle, so the offline
 stand-in answers by grep and says so rather than play-acting a refusal.
 
+The runaway demo is the two backstops, and both of its controls are outside the loop the agent's
+author wrote — because the agent that needs stopping is the one whose author did not think it
+would. It ends on the decision a human actually has to make: reopening an exhausted thread is
+not the same act as raising its ceiling, so it takes two ops, and doing only the first changes
+nothing at all.
+
 The auditor is the odd one out: no agent, no model, nothing being asked of a human. A relay
 signs a commitment, hides an event, gets caught, and is then proven to have done it — followed by
 the four controls that keep it from crying wolf, because a mechanism that accuses an honest relay
@@ -181,7 +211,15 @@ pnpm --filter @quorum/claude-agent live      # the Go packer and the TS packer, 
 cd apps/relay && QUORUM_CHECKPOINT_EVERY=5 QUORUM_CHECKPOINT_LAG=10 \
   QUORUM_CLOCK_SKEW_SECONDS=10 make run
 pnpm --filter @quorum/auditor live           # the relay's own checkpoints, recomputed in TypeScript
+
+cd apps/relay && QUORUM_EVENTS_BURST=400 QUORUM_FILTERS_BURST=400 make run
+pnpm --filter @quorum/runaway-agent live     # one fold in Go and TypeScript, and Stop over a socket
 ```
+
+The bursts, not the per-minute rates: khatru's limiter counts up to the burst and forgives the
+rate once a minute, so raising `QUORUM_EVENTS_PER_MINUTE` alone does nothing. A runaway agent
+trips the relay's rate limit well before it trips its own budget — the cheaper backstop firing
+first, which is right in production and unhelpful in a script watching the other one.
 
 Or drive it yourself, as the human the agent is asking. [`apps/console`](apps/console) has the
 full walkthrough; the short version is a keypair, a group, a grant, and then:

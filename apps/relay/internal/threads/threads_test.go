@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,11 +29,26 @@ func coordinate(event *nostr.Event) string {
 	return fmt.Sprintf("%d:%s:%s", event.Kind, event.PubKey, event.Tags.GetD())
 }
 
+// ReplaceEvent keeps the real store's rule rather than the obvious one: an
+// addressable event is replaced only by a *newer* one, and same-second ties are
+// broken by NIP-01's lowest id. A fake that overwrites unconditionally would
+// hide the exact defect this rule causes — see
+// TestEachProjectionIsNewerThanTheLast.
 func (s *memoryStore) ReplaceEvent(ctx context.Context, event *nostr.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if previous, ok := s.events[coordinate(event)]; ok && !isOlder(previous, event) {
+		return nil
+	}
 	s.events[coordinate(event)] = event
 	return nil
+}
+
+// isOlder is eventstore/internal.IsOlder, copied because it is unexported.
+func isOlder(previous, next *nostr.Event) bool {
+	return previous.CreatedAt < next.CreatedAt ||
+		(previous.CreatedAt == next.CreatedAt && previous.ID > next.ID)
 }
 
 func (s *memoryStore) QueryEvents(ctx context.Context, filter nostr.Filter) (chan *nostr.Event, error) {
@@ -301,6 +317,168 @@ func TestConcurrentOpsAreSerialised(t *testing.T) {
 	state := h.state(t)
 	if len(state.FoldedFrom) != ops {
 		t.Errorf("folded_from holds %d ids after %d concurrent ops", len(state.FoldedFrom), ops)
+	}
+}
+
+func ints(v int64) *int64       { return &v }
+func floats(v float64) *float64 { return &v }
+
+// `spent` is a sum of reports, never an assignment. An agent says what a turn
+// cost; the total is nobody's single statement, which is what makes it
+// recomputable from the ops in folded_from.
+func TestSpendAccumulates(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(100), TokensOut: ints(20), USD: floats(0.5)}})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(5), USD: floats(0.25)}})
+
+	state := h.state(t)
+	if tokensSpent(state.Spent) != 125 {
+		t.Errorf("tokens spent is %d, want 125", tokensSpent(state.Spent))
+	}
+	if state.Spent.USD == nil || *state.Spent.USD != 0.75 {
+		t.Errorf("usd spent is %v, want 0.75", state.Spent.USD)
+	}
+}
+
+// `{}` and `{"usd": 0}` are different claims — "nobody said" and "it was free".
+// A thread reported in tokens that grows a usd total reads as having been
+// priced, and somebody downstream will believe it.
+func TestAnUnreportedDimensionStaysAbsent(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(10)}})
+
+	body := h.published.events[0].Content
+	if strings.Contains(body, `"usd"`) || strings.Contains(body, `"msat"`) {
+		t.Errorf("a token-only spend invented a currency total: %s", body)
+	}
+}
+
+func TestAnAddSpendWithNoCostChangesNothing(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "add_spend"})
+	if got := h.published.count(); got != 0 {
+		t.Errorf("an empty add_spend published %d events", got)
+	}
+}
+
+// The safety valve. Both halves of the spend count against a ceiling stated in
+// tokens: 600 in and 500 out is over 1000, and looks fine from either column.
+func TestCrossingTheBudgetPausesTheThread(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_budget", Budget: &Budget{Tokens: ints(1000)}})
+	h.op(t, Op{Op: "set_status", Status: "working"})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(600), TokensOut: ints(100)}})
+
+	if state := h.state(t); state.Status != "working" {
+		t.Fatalf("status is %q after spending 700 of 1000, want working", state.Status)
+	}
+
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensOut: ints(400)}})
+	if state := h.state(t); state.Status != "paused" {
+		t.Errorf("status is %q after spending 1100 of 1000, want paused", state.Status)
+	}
+}
+
+// Lowering the ceiling under the spend is the other way the relationship
+// changes, and `set_budget {usd: 0}` is therefore a freeze — using a capability
+// that already exists rather than a new verb for stopping a thread.
+func TestSettingABudgetBelowTheSpendPausesImmediately(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_status", Status: "working"})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{USD: floats(4)}})
+	h.op(t, Op{Op: "set_budget", Budget: &Budget{USD: floats(0)}})
+
+	if state := h.state(t); state.Status != "paused" {
+		t.Errorf("status is %q after a zero budget, want paused", state.Status)
+	}
+}
+
+// A budget with nothing in it is not a ceiling of zero. The version of this
+// that ships broken pauses every thread in the workspace the day budgets land.
+func TestAThreadWithNoCeilingIsNeverPaused(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_status", Status: "working"})
+	h.op(t, Op{Op: "set_budget", Budget: &Budget{}})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(1_000_000)}})
+
+	if state := h.state(t); state.Status != "working" {
+		t.Errorf("status is %q with no ceiling set, want working", state.Status)
+	}
+}
+
+// The rule that keeps the pause resumable. If the fold re-paused on a
+// set_status, a human's "working" would be rewritten to "paused" by the very
+// event that stored it, and the only visible effect would be a button that does
+// nothing.
+func TestAHumanCanResumeAnExhaustedThread(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_budget", Budget: &Budget{Tokens: ints(10)}})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(50)}})
+	if state := h.state(t); state.Status != "paused" {
+		t.Fatalf("status is %q, want paused", state.Status)
+	}
+
+	h.op(t, Op{Op: "set_status", Status: "working"})
+	if state := h.state(t); state.Status != "working" {
+		t.Errorf("status is %q after a human resumed it, want working", state.Status)
+	}
+
+	// And it holds only until the next report, which is the honest answer:
+	// resuming does not unspend anything, so raising the budget is the durable
+	// fix and the next spend says so.
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(1)}})
+	if state := h.state(t); state.Status != "paused" {
+		t.Errorf("status is %q after more spending on an exhausted thread, want paused", state.Status)
+	}
+}
+
+// A late spend report must not un-finish delivered work.
+func TestAFinishedThreadIsNotPaused(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_budget", Budget: &Budget{Tokens: ints(10)}})
+	h.op(t, Op{Op: "set_status", Status: "done"})
+	h.op(t, Op{Op: "add_spend", Cost: &Cost{TokensIn: ints(500)}})
+
+	if state := h.state(t); state.Status != "done" {
+		t.Errorf("status is %q after a late spend report, want done", state.Status)
+	}
+}
+
+// Two folds inside one second is the normal case, and the store replaces an
+// addressable event only with a newer one — ties going to the lowest id. So a
+// projector that signs everything at `now` loses about half its updates to a
+// hash, and the thread is left asserting something that was true one op ago.
+//
+// This bit for real: the budget tests published `set_budget` and `set_status`
+// together and the relay kept whichever won the tiebreak.
+func TestEachProjectionIsNewerThanTheLast(t *testing.T) {
+	h := setup(t)
+
+	h.op(t, Op{Op: "set_status", Status: "working"})
+	h.op(t, Op{Op: "set_title", Title: "ship it"})
+	h.op(t, Op{Op: "set_status", Status: "blocked"})
+
+	if got := h.published.count(); got != 3 {
+		t.Fatalf("published %d states, want 3", got)
+	}
+	for i := 1; i < len(h.published.events); i++ {
+		if h.published.events[i].CreatedAt <= h.published.events[i-1].CreatedAt {
+			t.Errorf("state %d is dated %d, not after %d",
+				i, h.published.events[i].CreatedAt, h.published.events[i-1].CreatedAt)
+		}
+	}
+
+	// And the store kept the last one, which is the consequence that matters.
+	if state := h.state(t); state.Status != "blocked" || state.Title != "ship it" {
+		t.Errorf("the stored state is %+v; an update was dropped", state)
 	}
 }
 

@@ -24,6 +24,9 @@ pnpm add @quorum/protocol
 | `src/validate.ts` | Three-layer validation, returns structured issues |
 | `src/build.ts` | Construct valid unsigned events |
 | `src/alt.ts` | Fallback-text rules and defaults |
+| `src/resources.ts` | The capability resource names, including the two the relay enforces |
+| `src/merkle.ts` | `sha256-merkle-sorted-v1`, the tree a checkpoint commits with |
+| `src/cost.ts` | Adding up what a task cost and deciding when it has cost enough |
 | `schemas/` | **Generated, committed.** JSON Schema for every body |
 | `fixtures/` | **Generated, committed.** A signed golden transcript |
 

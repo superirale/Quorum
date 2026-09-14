@@ -245,6 +245,7 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		policy.RejectUnaskedApprovals(index, db),
 		policy.RequireGrantToJoin(db, authority),
 		policy.RequireGrantToSetBudget(db, authority),
+		policy.RejectWorkOnPausedThread(db, projector.PublicKey()),
 	)
 
 	if cfg.EventsPerMinute > 0 {

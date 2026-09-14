@@ -356,6 +356,31 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     }
   }
 
+  if (kind === EphemeralKinds.Interrupt) {
+    // `scope` defaults to `action`, so an interrupt that names no action is the
+    // easy one to publish by accident — and it is the dangerous shape, because
+    // an agent reading it has to guess whether "stop" meant this action or
+    // everything in the thread. Say which.
+    if ((body.scope ?? 'action') === 'action' && !tagValue(tags, TagName.Action)) {
+      issues.push(
+        err(
+          'missing_action_tag',
+          'an action-scoped interrupt must carry an `action` tag naming what to stop; use scope "thread" to stop everything',
+          'action',
+        ),
+      )
+    }
+    if (body.mode === 'steer' && !body.instruction) {
+      issues.push(
+        warn(
+          'steer_without_instruction',
+          'a steer with no instruction tells an agent to change course without saying to what',
+          'content.instruction',
+        ),
+      )
+    }
+  }
+
   if (kind === AddressableKinds.ThreadState) {
     const d = tagValue(tags, TagName.Identifier)
     if (d && !/^[0-9a-f]{64}$/.test(d)) {

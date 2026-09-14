@@ -14,6 +14,7 @@
 export * from './alt.ts'
 export * from './bodies/index.ts'
 export * from './build.ts'
+export * from './cost.ts'
 export * from './digest.ts'
 export * from './event.ts'
 export * from './filter.ts'

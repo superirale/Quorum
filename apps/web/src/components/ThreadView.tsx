@@ -18,20 +18,28 @@
  * deliberately not here: a spending ceiling is authority rather than
  * coordination, the relay gates it on a `thread:budget` grant, and offering a
  * control that most members' requests will be refused for is worse than not
- * offering it.
+ * offering it. `quorum budget` is where that decision is made, by someone who
+ * holds the grant.
+ *
+ * Stop is the exception to all of that. It is a kind 28101 ephemeral event, not
+ * an op and not a write: any member may send one, nothing stores it, and there
+ * is no receipt. That last part is a design consequence rather than a gap, so
+ * the screen says it out loud rather than letting a green tick imply a deploy
+ * was stopped when nothing was listening.
  */
 
 import { useState } from 'react'
 import {
   Kinds,
   TagName,
+  checkBudget,
   tagValue,
   type Budget,
   type Cost,
   type NostrEvent,
   type ThreadStatus,
 } from '@quorum/protocol'
-import { threadOp, type ActionChain, type Thread } from '@quorum/sdk'
+import { interrupt, threadOp, type ActionChain, type Thread } from '@quorum/sdk'
 import { describe, hue, short, when } from '../format.ts'
 import type { Workspace } from '../useWorkspace.ts'
 import { Check } from './Tasks.tsx'
@@ -64,13 +72,22 @@ export function ThreadView({
         <span className={`pill status-${thread.status}`}>{thread.status}</span>
         <Check check={thread.check} />
         {thread.assignee && <span className="dim">assigned to {short(thread.assignee)}</span>}
-        {thread.budget && (
-          <span className="dim">
-            budget {budget(thread.budget)}
-            {thread.spent ? ` · spent ${budget(thread.spent)}` : ''}
+        {(thread.budget || thread.spent) && (
+          <span className={exhausted(thread) ? 'pill status-paused' : 'dim'}>
+            spent {thread.spent ? budget(thread.spent) : '—'}
+            {thread.budget ? ` of ${budget(thread.budget)}` : ' · no ceiling'}
           </span>
         )}
       </div>
+
+      {exhausted(thread) && (
+        <div className="banner warn">
+          This task has spent its budget. The relay refuses new work in a paused thread, and
+          agents check the ceiling before proposing any — so nothing more starts until somebody
+          raises it. Resuming is not enough on its own: the ceiling is still spent, so the next
+          spend report pauses the task again.
+        </div>
+      )}
 
       {thread.check.verdict === 'disagrees' && (
         <div className="banner error">
@@ -87,6 +104,7 @@ export function ThreadView({
       )}
 
       <Controls workspace={workspace} thread={thread} />
+      <Stop workspace={workspace} thread={thread} chains={chains} />
 
       <h2>Actions</h2>
       <Chains chains={chains} />
@@ -173,6 +191,85 @@ function Controls({ workspace, thread }: { workspace: Workspace; thread: Thread 
 }
 
 /**
+ * The Stop button.
+ *
+ * Shown only while something is running, because a Stop with nothing to stop is
+ * the control people learn to ignore. "Running" means a chain whose last status
+ * is `running` — computed from the causal chain, not from the newest event, so
+ * an action that succeeded a moment ago stops offering a button that would do
+ * nothing.
+ *
+ * The caveat under it is not decoration. Kind 28101 is ephemeral: no relay
+ * stores it, there is no receipt, and an agent that is down hears nothing. A
+ * human who believes they stopped a deploy and walks away is a worse outcome
+ * than a human who knows they have to check — so the sentence is on the screen
+ * rather than in the docs.
+ */
+function Stop({
+  workspace,
+  thread,
+  chains,
+}: {
+  workspace: Workspace
+  thread: Thread
+  chains: ActionChain[]
+}) {
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState<string | undefined>()
+  const [problem, setProblem] = useState<string | undefined>()
+
+  const running = chains.filter((chain) => chain.status === 'running')
+  if (!running.length) return null
+
+  const ref = { id: thread.root.id, kind: thread.root.kind, pubkey: thread.root.pubkey }
+
+  const send = async (action: string | undefined, name: string) => {
+    setBusy(true)
+    setProblem(undefined)
+    setSent(undefined)
+    try {
+      await workspace.publish(interrupt({ thread: ref, ...(action ? { action } : {}) }))
+      setSent(name)
+    } catch (error) {
+      setProblem((error as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="controls stop">
+      {running.map((chain) => (
+        <button
+          key={chain.actionId}
+          className="danger"
+          disabled={busy}
+          onClick={() => void send(chain.actionId, chain.name)}
+        >
+          Stop {chain.name}
+        </button>
+      ))}
+      {running.length > 1 && (
+        <button
+          className="danger"
+          disabled={busy}
+          onClick={() => void send(undefined, 'everything in this task')}
+        >
+          Stop everything
+        </button>
+      )}
+      {sent && (
+        <span className="dim">
+          asked to cancel {sent}. Nothing stores an interrupt — if no agent was listening,
+          nothing was stopped. Watch the timeline for a <code>cancelled</code> event.
+        </span>
+      )}
+      {problem && <span className="bad">{problem}</span>}
+    </div>
+  )
+}
+
+/**
  * Everything in this thread, oldest first.
  *
  * `(created_at, id)` — NIP-01's order, which is the right one here and the
@@ -194,6 +291,17 @@ function inThisThread(event: NostrEvent, id: string): boolean {
   return event.kind === Kinds.ThreadState
     ? tagValue(event.tags, TagName.Identifier) === id
     : tagValue(event.tags, TagName.RootEvent) === id
+}
+
+/**
+ * Has this task spent its ceiling?
+ *
+ * Asked of `checkBudget` rather than compared here, because the relay pauses
+ * the thread on exactly this predicate. A screen that drew its own conclusion
+ * would eventually show "fine" over a thread the relay is refusing work in.
+ */
+function exhausted(thread: Thread): boolean {
+  return checkBudget(thread.spent, thread.budget).exhausted
 }
 
 /**

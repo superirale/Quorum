@@ -50,6 +50,20 @@ Everything is environment-driven. Nothing here is secret except the key.
 | `QUORUM_CHECKPOINT_EVERY` | `300` | seconds between checkpoints per group; `0` disables |
 | `QUORUM_CHECKPOINT_LAG` | `900` | seconds behind now at which a window closes |
 
+**The burst is the real limit, not the per-minute rate.** khatru's rate limiter
+is not a bucket that refills continuously: a counter climbs to the burst and a
+goroutine subtracts the per-minute allowance once a minute. So nothing may exceed
+`*_BURST` requests between two ticks whatever the rate says, and raising
+`QUORUM_EVENTS_PER_MINUTE` alone has no effect at all on a burst. Both limits are
+also keyed by **IP**, so on localhost a human and their agents share one bucket —
+and so do two consecutive runs of the same script.
+
+That matters more here than it looks. A runaway agent trips the rate limit long
+before it trips its thread budget: both are backstops from the same paragraph of
+the plan, and the cheaper one fires first. That is the right order in production
+and the wrong one for `examples/runaway-agent`, which documents the settings it
+needs to get past it.
+
 The relay's key is its identity. It signs the NIP-29 group metadata clients
 trust and the checkpoints that make withholding an event provable.
 Losing it means every group's metadata is suddenly signed by a stranger, so it
@@ -85,8 +99,11 @@ actor's role · deleted events stay deleted · `previous` tag checking.
    from an owner or admin of that group. See [Membership](#membership).
 10. `RequireGrantToSetBudget` — a `set_budget` thread op needs `thread:budget`.
     Every other op stays open to members.
+11. `RejectWorkOnPausedThread` — a kind 8101 whose status is `proposed` or
+    `running` is refused in a thread the projection says is `paused`. See
+    [Thread state](#thread-state) for what it must *not* refuse.
 
-The last four are last because they are the only policies that read the
+The last five are last because they are the only policies that read the
 database. An event that is malformed, out of range or from a stranger has
 already been refused without touching a disk.
 
@@ -175,6 +192,53 @@ same logic, reaching the same state from the same ops.
 `folded_from` is capped at 200 ids. It lives inside a replaceable event that is
 rewritten on every change, and a thread worked on for months would otherwise
 grow an unbounded tag list; the dropped ids are still fetchable by thread.
+
+### The projection's timestamp is monotonic, not the clock
+
+A projection is signed at `max(now, previous + 1)`, which means a burst of ops
+can date the 38101 a second or two ahead of the wall clock.
+
+Two folds inside one second is the normal case rather than an edge: a client
+publishes `set_budget` and `set_status` together, or an agent reports a spend
+that pauses the thread. With equal timestamps the addressable replace falls
+through to NIP-01's lowest-id tiebreak, so about half the time the *older* state
+wins on a hash, the newer one is silently not stored, and the thread is left
+saying something that was true one op ago.
+
+The relay authors these events, so keeping them strictly ordered is the honest
+fix: a projection folded later really is later, and `created_at` is exactly the
+field NIP-01 orders by. Client events get no such licence — they still face
+`RejectImplausibleTimestamps`.
+
+### Budgets, and what a paused thread still accepts
+
+`spent` is the sum of the thread's `add_spend` ops and nothing else. An action
+body's own `cost` is audit detail; folding both would double every number in the
+workspace. The arithmetic lives in `packages/protocol/src/cost.ts` as well, and
+the two copies have to agree — `examples/runaway-agent`'s `live` script is what
+checks that they do, by running an agent out of money over a socket and replaying
+the relay's own `folded_from` in TypeScript.
+
+The fold sets `paused` when the folded state has reached any stated ceiling. It
+does so only while folding `add_spend` or `set_budget`, never `set_status` (or a
+human could not reopen the thread — their `working` would be rewritten by the
+same fold that stored it), never on a `done` thread, and it only ever *sets*
+`paused`: raising a ceiling does not resume anything. Resuming and raising are
+two decisions and take two ops.
+
+`RejectWorkOnPausedThread` then refuses `proposed` and `running` there, and
+nothing else. Terminal transitions of an action already running get through, or a
+paused thread loses the record of work that really happened; so do chat,
+comments and every thread op, or a budget alert becomes an outage in the one
+thread people need to talk in.
+
+A thread with no 38101 is allowed through, and that is **not** the fail-open
+compromise the approval policies make. There is no hidden evidence here: the
+projection is written by this relay and only this relay, so a thread it holds no
+state for has never been paused on it. The policy also stands down entirely on
+`nip44` and `mls` channels, where there is no status to read — which is the
+reason it can never be the only thing enforcing a budget, and why the SDK checks
+the ceiling before it proposes.
 
 ## Context packing
 

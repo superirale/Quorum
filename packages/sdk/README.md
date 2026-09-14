@@ -27,7 +27,7 @@ await agent.start()
 
 `examples/echo-agent` is that program, complete, with the reasoning in comments.
 
-## Four things to know before writing the handler
+## Five things to know before writing the handler
 
 **`on()` only ever fires for events addressed to you.** Addressing is a `to`-marked `p` tag —
 `["p", "<pubkey>", "", "to"]` — and nothing else. Not your name in the text, not a bare mention,
@@ -73,6 +73,30 @@ const result = await ctx.act({
 The agent having verified the approval is not what makes the deploy safe — the agent is the party
 with an interest in the answer. The resource re-derives it: see `examples/deploy-agent`.
 
+**Two things can stop an action without your handler being consulted.** `act()` checks the
+thread's budget *before* it proposes anything, and returns `{status: 'cancelled'}` with no
+`actionId` if the ceiling is spent — nothing is published, which is deliberate: a rejected
+publish raises, a raise is replayed, and a replay against a relay that will refuse it every time
+is a budget stop turned into a retry loop. And any member may publish a kind 28101 while your
+effect is running, which aborts the `AbortSignal` it was handed and closes the chain
+`cancelled`. So **check `result.status`** rather than assuming success, and pass `run.signal`
+into anything that takes one.
+
+Report what the work cost by assigning `run.cost`, and assign it on the way *in* rather than at
+the end:
+
+```ts
+run: async (approved, run) => {
+  run.cost = { tokens_in: 9000, tokens_out: 3000 }
+  return read(approved.page, run.signal)   // pass the signal on
+}
+```
+
+Set it on the way out and an interrupted action reports nothing, which makes Stop a way to get
+work for free. The SDK turns `run.cost` into an `add_spend` op named after the action — that
+name is why a thread which ran out of money can be read to find out which part of it was
+expensive. `examples/runaway-agent` is the whole of this, demonstrated.
+
 ## What is in here
 
 | | |
@@ -95,6 +119,7 @@ with an interest in the answer. The resource re-derives it: see `examples/deploy
 | `presence.ts` | `PresenceReporter` beats kind 28103 while an agent runs; `presence()` reads the beats. Ephemeral, so an empty result means "nobody has said", never "nobody is running". |
 | `context.ts` | `packContext()` — the `extractive-v1` compactor, deterministic to the byte; `fetchContext()` asks a DVM for the same thing; `renderContext()` turns a pack into a prompt and fences what is not ours. `ctx.context()` picks between the two and the caller cannot tell which answered. |
 | `checkpoints.ts` | The reader's half of ordering integrity. `verifyWindow()` recomputes a relay's signed root from the events it served; `withholdingProof()` turns "short" into an artifact a stranger can check with `verifyWithholdingProof()`, no relay and no network. `checkChain()` walks the windows. |
+| `interrupt.ts` | Stop. `interrupt()` builds the kind 28101 a human's client publishes; `Interrupts` arms an `AbortSignal` per running action and aborts it when one arrives. `InterruptedError` is how an effect that catches broadly tells "somebody stopped me" from "it broke". Ephemeral, so there is no receipt — see below. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 
 ## Design notes that cost something to learn
@@ -185,7 +210,7 @@ rather than against another copy of the same list.
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 269 tests
+pnpm --filter @quorum/sdk test        # 306 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

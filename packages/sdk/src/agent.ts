@@ -25,15 +25,19 @@
  */
 
 import {
+  EphemeralKinds,
   Kinds,
   TagName,
   addressees as addresseesOf,
+  checkBudget,
+  describeBudget,
   digest,
   isEphemeral,
   refTo,
   tagValue,
   threadRef,
   type ContextPackResultBody,
+  type Cost,
   type EventRef,
   type Filter,
   type NostrEvent,
@@ -46,10 +50,16 @@ import {
   isForMe,
   threadFilter,
 } from './addressing.ts'
-import { runAction, type ActOptions, type ActResult } from './approval.ts'
+import {
+  runAction,
+  type ActOptions,
+  type ActResult,
+  type BudgetVerdict,
+} from './approval.ts'
 import { RelayClient, type Logger, type Subscription } from './client.ts'
 import { fetchContext, packContext, type FetchContextOptions } from './context.ts'
 import { Counters } from './counter.ts'
+import { Interrupts, type Interruption } from './interrupt.ts'
 import { createMemory, type Memory } from './memory.ts'
 import { LeaseManager, type Lease, type LeaseOptions } from './lease.ts'
 import { createOnce, incompleteEffects, type Once } from './once.ts'
@@ -57,6 +67,7 @@ import { PresenceReporter, type PresenceOptions } from './presence.ts'
 import { Publisher, type PublishOptions } from './publish.ts'
 import { Cursor, type Gap } from './replay.ts'
 import { MemoryStore, type Store } from './store.ts'
+import { threadOp, threadState } from './threads.ts'
 import type { Signer } from './signer.ts'
 
 export interface AgentOptions {
@@ -119,6 +130,21 @@ export interface AgentContext {
   /** Claim this thread, so a sibling replica does not answer it too. */
   lease(purpose?: string): Promise<Lease>
   /**
+   * Report what this turn cost, onto the thread's running total.
+   *
+   * Call it for the work `act()` does not cover — the model call that decided
+   * what to propose, which is usually where the money actually goes. `act()`
+   * reports its own effect's `run.cost` already, so reporting it again here
+   * would double-count it.
+   *
+   * Self-reported, and that is the design rather than a gap: the alternative is
+   * a relay that estimates, which cannot work on an encrypted channel and is a
+   * guess on a plaintext one. See `threadOp` in `threads.ts`.
+   */
+  spend(cost: Cost, options?: SpendOptions): Promise<NostrEvent>
+  /** How much is left in this thread, and whether there is any. */
+  budget(): Promise<BudgetVerdict>
+  /**
    * This thread's history, compacted to a token budget and labelled by trust.
    *
    * Packed locally by default. Pass `packer` to ask a relay-hosted one instead,
@@ -147,6 +173,13 @@ export interface SayOptions {
   label?: string
 }
 
+export interface SpendOptions {
+  /** Why. Shown beside the amount in the task timeline. */
+  note?: string
+  /** The `once()` label. Defaults to a digest of the amount and the note. */
+  label?: string
+}
+
 export interface ContextOptions extends Partial<FetchContextOptions> {
   /** Which thread to pack. Defaults to the one the triggering event is in. */
   thread?: string
@@ -168,6 +201,7 @@ export class Agent {
   /** Ids whose handler was interrupted by a restart. They go to the front. */
   private readonly replaying = new Set<string>()
   private readonly inFlightEffects = new Map<string, Promise<unknown>>()
+  private readonly interrupts = new Interrupts()
   private readonly ownedClient: boolean
 
   private pubkey = ''
@@ -297,6 +331,10 @@ export class Agent {
 
   async stop(): Promise<void> {
     this.running = false
+    // Whatever is mid-effect gets told before the socket goes, so an effect that
+    // honours its signal unwinds rather than discovering the shutdown as a
+    // rejected publish. Its handler stays in flight either way and is replayed.
+    this.interrupts.abortAll(new Error('the agent is shutting down'))
     this.leases?.stop()
     // Before the socket goes: an `offline` published after `close()` is an
     // exception in a shutdown path, and the TTL already covers the case where
@@ -403,6 +441,15 @@ export class Agent {
   private ingest(event: NostrEvent): void {
     if (isEphemeral(event.kind)) {
       if (event.pubkey === this.pubkey && !this.options.includeOwn) return
+      // Before the handlers, and synchronously. `run()` is async and the control
+      // handlers are user code that may await; a Stop that aborts only after
+      // somebody else's `onControl` has finished its round trip is a Stop with
+      // an unbounded delay in front of it, which is the one property it must not
+      // have. Delivering first also means a handler can read what was stopped.
+      if (event.kind === EphemeralKinds.Interrupt) {
+        const stopped = this.interrupts.deliver(event)
+        for (const it of stopped) this.announceInterrupt(it)
+      }
       void this.run(this.control, event)
       return
     }
@@ -566,9 +613,28 @@ export class Agent {
             thread,
             parent: refTo(event),
             log: agent.log,
+            budget: () => agent.budgetFor(thread.id),
+            interrupts: agent.interrupts,
+            spend: (label, cost, note) => publish(label, spendOp(thread, cost, note)),
           },
           options,
         )
+      },
+
+      spend(cost, options = {}) {
+        if (!thread) {
+          throw new Error(
+            'spend is recorded against a thread, and this event is not in one. A cost ' +
+              'with no task attached is a number nobody can evaluate.',
+          )
+        }
+        const label = options.label ?? `spend:${digest([cost, options.note ?? '']).slice(0, 16)}`
+        return publish(label, spendOp(thread, cost, options.note))
+      },
+
+      budget() {
+        if (!thread) return Promise.resolve({ exhausted: false })
+        return agent.budgetFor(thread.id)
       },
 
       async lease(purpose) {
@@ -652,6 +718,54 @@ export class Agent {
     ])
   }
 
+  /**
+   * How much is left in a thread, read fresh from the relay every time.
+   *
+   * Two filters, and neither of them fetches the kind 11 root: the projection by
+   * `d` and the ops by `E`. `threadState` folds them the same way `threads()`
+   * does, which matters because the number this returns has to agree with the
+   * one the relay used when it decided whether to accept the `proposed` event.
+   *
+   * It fails open. A relay that cannot be reached is an agent that cannot work
+   * at all a moment later — the next publish throws — so refusing here would
+   * only turn a connection error into a budget error and send whoever reads the
+   * log to the wrong screen. The relay's own `RejectWorkOnPausedThread` is the
+   * layer that does not depend on us asking.
+   */
+  private async budgetFor(id: string): Promise<BudgetVerdict> {
+    const group = this.options.group
+    let events: NostrEvent[]
+    try {
+      events = await this.client.query([
+        { kinds: [Kinds.ThreadState], [`#${TagName.Identifier}`]: [id], [`#${TagName.Group}`]: [group] },
+        { kinds: [Kinds.ThreadOp], [`#${TagName.RootEvent}`]: [id], [`#${TagName.Group}`]: [group] },
+      ])
+    } catch (error) {
+      this.log.warn(`[agent] could not read the thread's budget: ${String(error)}`)
+      return { exhausted: false }
+    }
+
+    const state = threadState(events, id)
+    const check = checkBudget(state.spent, state.budget)
+    if (!check.exhausted) return { exhausted: false }
+    return {
+      exhausted: true,
+      reason: `this thread has spent its budget (${describeBudget(state.spent, state.budget)})`,
+    }
+  }
+
+  /** Say what an interrupt stopped, at warn, because somebody is waiting on it. */
+  private announceInterrupt(it: Interruption): void {
+    const who = it.from.slice(0, 8)
+    if (it.mode === 'steer') {
+      this.log.warn(`[interrupt] ${who}… steered a running action; the handler decides what to do`)
+      return
+    }
+    this.log.warn(
+      `[interrupt] ${who}… asked to ${it.mode} a running action${it.reason ? `: ${it.reason}` : ''}`,
+    )
+  }
+
   private memoryFor(): Memory {
     this.memoryCache ??= createMemory({
       client: this.client,
@@ -661,6 +775,10 @@ export class Agent {
     })
     return this.memoryCache
   }
+}
+
+function spendOp(thread: EventRef, cost: Cost, note?: string): PublishOptions {
+  return threadOp(thread, { op: 'add_spend', cost, ...(note ? { note } : {}) })
 }
 
 function altOf(event: NostrEvent): string {
