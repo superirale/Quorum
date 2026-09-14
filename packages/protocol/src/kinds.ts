@@ -39,6 +39,22 @@ export const BorrowedKinds = {
   GroupMembers: 39002,
   /** NIP-90 job feedback. Used by the context-packing DVM. */
   JobFeedback: 7000,
+  /**
+   * Marmot MLS KeyPackage — the `mls` bootstrap. Addressable; `d` is the group.
+   *
+   * Borrowed rather than allocated, because the *content* really is Marmot's: a
+   * framed `mls_key_package` MLSMessage, readable by any RFC 9420 library. The
+   * tags are where Quorum diverges, and `spec/nip-quorum.md` says how.
+   *
+   * The number is the third thing this project has had to re-check about
+   * Marmot. The plan wrote down 443 in M1; the Marmot repo moved to 30443 by the
+   * M10 spec pass; and the NIPs README still says 443 today while the
+   * machine-readable registry says 30443 with a required `encoding` tag that
+   * Marmot's own current document does not list. Two registries, two answers,
+   * both behind the source. A borrowed kind number is not a decision anyone gets
+   * to keep.
+   */
+  MlsKeyPackage: 30443,
 } as const
 
 /** Regular kinds: stored by relays, replayable, the durable record. */
@@ -72,6 +88,46 @@ export const RegularKinds = {
    * not a substitute for the first.
    */
   ChannelKey: 8110,
+  /**
+   * One member's MLS Welcome, wrapped to them with pairwise NIP-44.
+   *
+   * The `mls` analogue of 8110 and deliberately the same shape: an inviter hands
+   * one named member the material that lets them read the channel, in the clear
+   * about *who* was handed *what*, and unreadable as to the material itself.
+   *
+   * ## Why this is not NIP-59's 1059 → 13 → 444
+   *
+   * Marmot delivers a Welcome as an unsigned kind 444 rumor inside a kind 13
+   * seal inside a kind 1059 gift wrap, and this plan said Quorum would too. It
+   * cannot, and the reason is verifiable rather than aesthetic: **relay29
+   * refuses any event carrying an `h` tag whose author is not a member of that
+   * group** (`RestrictWritesBasedOnGroupRules`, "unknown member"), and a Quorum
+   * gift wrap has to carry `h`, because relay29 equally refuses a `#p` filter
+   * that does not also name a group — so `{kinds:[1059], '#p':[me]}` comes back
+   * CLOSED and the recipient could never fetch it. An `h` tag and an ephemeral
+   * author cannot both be true here.
+   *
+   * Sign the wrap with the inviter's real key instead and the two inner layers
+   * stop buying anything. Kinds 1059 and 13 exist *only* to hide the sender:
+   * 1059 from the relay, 13 from everyone but the recipient. With `h` naming the
+   * group, a `to`-marked `p` naming the recipient and a real signature naming
+   * the sender, all three facts are already published, and the MLS Welcome's own
+   * confidentiality never depended on the Nostr layer — it is HPKE-encrypted to
+   * the recipient's `init_key` inside the MLSMessage. Keeping the stack would be
+   * claiming NIP-59 while breaking the one property NIP-59 is for.
+   *
+   * And 444 could not be the stored kind regardless. NIP-01 defines storage
+   * behaviour by range, and 444 falls in none of them — it is only ever a rumor
+   * inside a wrap, so Marmot never has to care. Option A says every Quorum event
+   * is valid on any generic relay, which means the Welcome needs a kind whose
+   * storage semantics are specified. This is that kind.
+   *
+   * The cost is stated rather than hidden: the workspace relay learns that this
+   * inviter added this member to the ratchet at this time. It already knew both
+   * parties were in the NIP-29 group, which under Quorum's two-lists rule had to
+   * happen first. See `bodies/encryption.ts`.
+   */
+  MlsWelcome: 8111,
 } as const
 
 /**
@@ -160,6 +216,11 @@ export const SUPPORTED_KINDS: readonly number[] = Object.freeze([
   // not the only one: from M9 the SDK-side packer answers encrypted channels
   // and publishes its refusals here like anyone else.
   BorrowedKinds.JobFeedback,
+  // The `mls` bootstrap. Listed for the same reason as job feedback: a relay
+  // that would not carry a KeyPackage makes "nobody has published one" and "you
+  // may not publish one" the same observation, and the member who cannot tell
+  // those apart is one who is waiting to be let into a channel.
+  BorrowedKinds.MlsKeyPackage,
   ...QUORUM_KINDS,
 ])
 

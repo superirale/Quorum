@@ -103,6 +103,8 @@ export function defaultAlt(kind: number, body: unknown): string {
       return clamp(threadOpAlt(b))
     case Kinds.ChannelKey:
       return clamp(`Channel key epoch ${b.epoch} for ${short(b.recipient)}`)
+    case Kinds.MlsWelcome:
+      return clamp(`MLS welcome to epoch ${b.epoch} for ${short(b.recipient)}`)
     case Kinds.ChannelPolicy:
       return clamp(
         b.enc === 'plaintext'

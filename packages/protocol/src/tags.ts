@@ -65,6 +65,19 @@ export const TagName = {
   Action: 'action',
   /** Quorum protocol version the author wrote against. */
   Version: 'quorum',
+
+  // --- kind 30443, borrowed from Marmot along with the kind number ----------
+
+  /** MLS protocol version a KeyPackage is for. One value exists: `1.0`. */
+  MlsProtocolVersion: 'mls_protocol_version',
+  /** The KeyPackageRef of the KeyPackage in this event, lowercase hex. */
+  MlsKeyPackageRef: 'i',
+  /** Ciphersuites the publisher supports, as an id list. */
+  MlsCiphersuite: 'mls_ciphersuite',
+  /** MLS extensions the publisher supports, as an id list. */
+  MlsExtensions: 'mls_extensions',
+  /** Proposal types the publisher supports, as an id list. */
+  MlsProposals: 'mls_proposals',
 } as const
 
 /**

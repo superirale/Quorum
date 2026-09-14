@@ -30,7 +30,8 @@ pnpm add @quorum/protocol
 | `src/nip44.ts` | NIP-44 v2, implemented against the reference vectors |
 | `src/seal.ts` | Sealing an event: the derived nonce, and which kinds stay in the clear |
 | `src/mls.ts` | The `mls` envelope: the three bindings between an MLSMessage and its event. No RFC 9420 — the ratchet is the SDK's |
-| `src/bodies/encryption.ts` | The channel policy (38107) and the wrapped channel key (8110) |
+| `src/mls-keys.ts` | The KeyPackage event (30443): its tag contract, the `0x`-hex id lists, and a parser that refuses every other spelling |
+| `src/bodies/encryption.ts` | The channel policy (38107), the wrapped channel key (8110) and the MLS Welcome (8111) |
 | `schemas/` | **Generated, committed.** JSON Schema for every body |
 | `fixtures/` | **Generated, committed.** A signed golden transcript, the Merkle vectors, and `nip44-v2.json` |
 

@@ -62,9 +62,7 @@ This NIP defines no chat or threading kinds of its own. It reuses:
 | 22242 | NIP-42 | Relay AUTH. |
 | 9000/9001/9021 | NIP-29 | Put-user, remove-user, join request. See [the two resources the relay owns](#the-two-resources-the-relay-owns). |
 | 39000–39002 | NIP-29 | Group metadata, admins, members. |
-| 30443 | Marmot | MLS KeyPackage, addressable, `d` = 32 random bytes (`mls` only). |
-| 1059 / 13 / 444 | Marmot, NIP-59 | Gift wrap, seal, and the unsigned Welcome rumor inside them (`mls` only). |
-| 10050 | NIP-17 | The account's inbox relay list, where a Welcome is delivered (`mls` only). |
+| 30443 | Marmot | MLS KeyPackage, addressable, `d` = **the channel id** (`mls` only). See [key establishment](#key-establishment-on-an-mls-channel). |
 | 445 | Marmot | Group message. Used only by the [Marmot transport profile](#the-marmot-transport-profile-is-optional), never by a Quorum-native `mls` channel. |
 
 A generic NIP-C7 or NIP-7D client joined to a Quorum workspace therefore sees the
@@ -86,6 +84,7 @@ whole human conversation with no modification.
 | 8108 | `checkpoint` | Relay-signed attestation of the events it holds. |
 | 8109 | `thread_op` | Requests a change to thread state. |
 | 8110 | `channel_key` | One member's copy of a channel's epoch key, wrapped to them. |
+| 8111 | `mls_welcome` | One member's MLS Welcome and the ratchet tree, wrapped to them. |
 
 ### Ephemeral (not stored, 20000–29999)
 
@@ -1046,6 +1045,11 @@ Two kinds make the mode possible and both stay unsealed:
   channel key), `recipient`, and optional `supersedes`. The recipient is also
   named by a `to`-marked `p` tag. A key wrapped under the channel key would be a
   locked box containing its own key.
+- **`mls_welcome` (8111)**, the `mls` analogue of 8110. Body: `epoch`, `invite`
+  (a NIP-44 payload from inviter to recipient), `recipient`, and `key_package`
+  (the **event id** of the 30443 this Welcome answers). The recipient is also
+  named by a `to`-marked `p` tag. See
+  [key establishment](#key-establishment-on-an-mls-channel).
 
 `supersedes` is how a member notices they were skipped: holding epoch 2 and
 being handed epoch 4 marked `supersedes: 3` says a rotation happened that nobody
@@ -1092,17 +1096,18 @@ they are private.
 
 | Kinds | Why |
 | --- | --- |
-| 8110, 38107, 30443, 1059, 10050 | key management — the bootstrap must be readable by someone with no key |
+| 8110, 8111, 38107, 30443 | key management — the bootstrap must be readable by someone with no key |
 | 38102, 38106, 22242 | authorization — a capability nobody can audit is not a capability |
 | 8108, 38101, 7000 | relay-authored — the relay cannot encrypt to a key it does not hold |
 | 9000–9030, 39000–39999 | NIP-29 moderation and metadata, addressed to the relay |
 
-The three Marmot kinds are unsealed for the same reason 8110 and 38107 are: they
-are how a member with no key gets one. Their *bodies* are not public. A 30443
-KeyPackage is signed public material by design, and a Welcome travels as an
-unsigned kind 444 rumor inside a kind 13 seal inside a kind 1059 gift wrap, which
-is pairwise to the recipient — a different key from the group's, so the wrapper
-being in the clear reveals only that somebody was invited somewhere.
+The two `mls` bootstrap kinds are unsealed for the same reason 8110 and 38107
+are: they are how a member with no key gets one. Their *bodies* are not public. A
+30443 KeyPackage is signed public material by design, and an 8111's `invite` is a
+NIP-44 payload from the inviter to the one recipient — a different key from the
+group's, so the envelope being in the clear reveals only that somebody was
+invited. Sealing either to the group would be sealing it to everybody except the
+person it is for.
 
 Everything else MUST be sealed on a channel whose policy says `nip44` or `mls`. A relay
 MAY refuse an unsealed content-bearing event on such a channel, and MAY refuse an
@@ -1311,6 +1316,112 @@ Removal is therefore two acts — a Remove commit and a NIP-29 kind 9001 — and
 implementation MUST NOT present either alone as removal. Order does not affect
 correctness for the remaining members, since the commit reaches them either way.
 
+### Key establishment on an `mls` channel
+
+Two kinds, in four acts, and the order is fixed by the relay rather than by
+preference:
+
+1. the joiner publishes a **kind 30443** KeyPackage into the channel;
+2. a member already in the tree reads it and checks it;
+3. that member commits an Add and publishes one **kind 8111** per new member;
+4. the new member opens their 8111 and joins the ratchet.
+
+Act 1 cannot happen before NIP-29 admission, because the event carries an `h`
+tag and a workspace relay refuses those from non-members. That is the design
+working rather than a constraint to route around: admission is a capability
+decision an owner makes, and the ratchet records the consequence. It does not
+merge the two lists — see [above](#membership-on-an-mls-channel-is-two-lists).
+
+**The KeyPackage (30443).** The kind number, the `content` and the tag names are
+Marmot's: `content` is base64 of a framed `mls_key_package` MLSMessage, and the
+tags are `mls_protocol_version` (`1.0`), `i` (the KeyPackageRef, 32 bytes of
+lowercase hex), and the three capability lists `mls_ciphersuite`,
+`mls_extensions` and `mls_proposals`. Each capability list is **one tag holding
+every value**, `0x`-prefixed lowercase 4-digit hex — not the usual one-tag-per-
+value convention, and a reader MUST refuse any other spelling rather than read
+`0x1` as nothing.
+
+Quorum diverges from Marmot in three places, each for a stated reason:
+
+- **`d` is the channel id, and the event carries an `h` tag.** Marmot's `d` is 32
+  random bytes and is explicitly never derived, because a derived `d` would leak
+  which groups a member is trying to join. A Quorum 30443 publishes the channel
+  in the clear anyway — it has to, so the relay can route and admit it — so a
+  random `d` protects nothing, while a predictable one makes
+  `30443:<pubkey>:<channel>` name exactly one member's current KeyPackage for
+  exactly one channel. An inviter can then fetch a specific member instead of
+  scanning the workspace, and addressable replacement does the single-use
+  bookkeeping: publishing the next KeyPackage into the slot retires the spent one.
+- **No `app_components` and no account-identity-proof.** Marmot requires a
+  `marmot.member.account-identity-proof.v2` entry in the leaf's app data, and the
+  requirement is specific to its transport: under a per-message ephemeral key the
+  Nostr layer says nothing about who authored anything, so the proof is how a
+  credential is tied back to an account. A Quorum 30443 is signed by the account.
+  The signature over the event whose content holds the credential **is** that
+  proof, over the same bytes by the same key, with one fewer format to disagree.
+- **No `encoding` tag.** This spec fixes base64 for every kind, so a tag
+  restating it is a third place to keep in step.
+
+An implementation MUST NOT claim Marmot KeyPackage compatibility on the strength
+of the shared kind number. The payload is the same object; the validity rules
+around it are not.
+
+**Before committing an Add**, a member MUST reject a 30443 that fails any of:
+the protocol version is `1.0`; the framed message is an `mls_key_package`; the
+ciphersuite is the one
+[this channel speaks](#mls-the-same-envelope-a-different-key-schedule); the
+KeyPackage's own signature verifies; the `i` tag equals the ref recomputed from
+the bytes actually sent; and the `basic` credential identity equals the event's
+`pubkey`.
+The last is the join-time half of
+[the authorship binding](#authorship-is-the-nostr-signature-not-the-mls-credential)
+and is the only moment it can be checked, because a receiver of an application
+message never sees a credential. A member who rejects one SHOULD report it: an
+invitee silently left out of a commit is waiting for a Welcome that is not coming.
+
+**The Welcome (8111).** One commit produces one Welcome, and the committer
+publishes it once per recipient as a kind 8111 `to`-marked to that member. The
+`invite` field is a NIP-44 payload from inviter to recipient whose plaintext is
+`{"welcome": <base64 framed mls_welcome MLSMessage>, "ratchet_tree": <base64
+TLS-encoded RatchetTree>}`. The tree travels with the Welcome because a joiner
+needs it to build the group state and MUST NOT be expected to obtain it from the
+relay; it is inside the NIP-44 payload because it carries every member's leaf
+node. `key_package` names the 30443 **by event id**, not by coordinate, because a
+KeyPackage is single-use and the addressable slot may already hold its
+replacement by the time the invitee reads it.
+
+The committer MUST commit before publishing. A crash in the gap costs the
+missed invitee their invitation — they are in the tree, can read nothing, and
+must be removed and re-added. Publishing first would hand out entry to an epoch
+the group never moved to, which is unrecoverable in the other direction because
+the recipient's KeyPackage is spent either way.
+
+A recipient whose current KeyPackage is not named in a Welcome's secrets MUST
+treat it as not theirs rather than as an error — a member added, removed and
+re-added has more than one 8111 in the channel — and MUST make that check before
+touching the ratchet. After a Welcome that failed to open, a member MUST NOT
+republish their KeyPackage: the old package's private half is the only thing that
+can open a Welcome already in flight, and replacing it turns a delivery problem
+into a member who can never be added.
+
+**Why this is not NIP-59.** Marmot delivers its Welcome as an unsigned kind 444
+rumor inside a kind 13 seal inside a kind 1059 gift wrap signed by an ephemeral
+key, announced through a kind 10050 inbox list. Quorum uses none of those four,
+and the reason is a relay rule rather than a preference. A gift wrap must carry
+an `h` tag to be routed and queried at all — a NIP-29 relay refuses a
+tag-filtered query that does not name a group — and it must be signed by an
+ephemeral key to be a gift wrap; but a NIP-29 relay refuses an `h`-tagged event
+whose author is not a member of that group. Both cannot be true of one event.
+With a real signing key the wrapping buys nothing anyway: the `h` tag publishes
+the channel, the `to`-marked `p` publishes the recipient, and the signature
+publishes the sender, which is the entire set of facts 1059 and 13 exist to hide.
+The Welcome's confidentiality never rested on the Nostr layer — it is HPKE-
+encrypted to the recipient's `init_key`. Kind 444 also falls outside every NIP-01
+storage range, so a stored 444 has undefined semantics on a generic relay, which
+the rule that every Quorum event is valid on any relay does not permit. And
+10050 has no reader here, because a Quorum invitee is already a NIP-29 member of
+the workspace relay by act 1.
+
 ### A ratchet cannot repeat itself
 
 `once()` rests on a retry rebuilding byte-identical bytes, so the relay's own
@@ -1412,7 +1523,10 @@ by a **fresh ephemeral key per event**, carrying exactly one `h` tag whose value
 is a random, rotatable `nostr_group_id`, and — normatively — no other tag but
 NIP-40 `expiration`. Key establishment is a kind 30443 KeyPackage, an unsigned
 kind 444 Welcome rumor inside a kind 13 seal inside a kind 1059 gift wrap, and a
-kind 10050 inbox relay list.
+kind 10050 inbox relay list. Of those four numbers Quorum reuses one — 30443,
+with three divergences — and replaces the rest with kind 8111; see
+[key establishment](#key-establishment-on-an-mls-channel) for why the gift wrap
+cannot be published to a relay that enforces membership.
 
 That transport buys metadata privacy: a relay cannot tell members apart, cannot
 tell which channel of a workspace is busy, and cannot link a message to an
@@ -1434,7 +1548,13 @@ An implementation MAY offer the profile, and if it does:
 - a routing rotation splits one channel's history across several `h` values, so a
   reader MUST keep the routing history and a checkpoint chain MUST follow it;
 - it MUST NOT be described as the same mode. A channel is either Quorum-routed or
-  Marmot-routed, and the two have different threat models.
+  Marmot-routed, and the two have different threat models;
+- key establishment MAY then use Marmot's 1059/13/444 gift wrap in place of kind
+  8111, because a transport that has already given up relay-side membership
+  enforcement has given up the rule that made the gift wrap unpublishable. It
+  MUST NOT mix the two: a channel whose messages are Quorum-routed and whose
+  Welcomes are gift-wrapped is claiming an admission control its own bootstrap
+  bypasses.
 
 ## Loop prevention
 

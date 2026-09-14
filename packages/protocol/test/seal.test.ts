@@ -198,12 +198,18 @@ describe('mustSeal', () => {
 
   test('leaves the `mls` bootstrap alone, or an agent cannot join the channel it is joining', () => {
     // Named individually rather than looped over `UNSEALED_KINDS`, because the
-    // test above is vacuous for exactly the failure these three had: the spec
+    // test above is vacuous for exactly the failure these two had: the spec
     // listed them and the table did not, and a loop over the table agrees with
     // whatever the table says. A sealed 30443 is a KeyPackage that only the
-    // group can read, published by somebody asking to be let into the group.
-    assert.ok(!mustSeal(30443)) // MLS KeyPackage
-    assert.ok(!mustSeal(1059)) // NIP-59 gift wrap carrying a Welcome
-    assert.ok(!mustSeal(10050)) // NIP-17 inbox relay list
+    // group can read, published by somebody asking to be let into the group; a
+    // sealed 8111 is a Welcome the one member who needs it cannot open.
+    assert.ok(!mustSeal(BorrowedKinds.MlsKeyPackage))
+    assert.ok(!mustSeal(RegularKinds.MlsWelcome))
+
+    // And the pair that came off the list when the Welcome stopped being a
+    // NIP-59 gift wrap. Quorum publishes neither, so leaving them on would have
+    // been the same prose-versus-table drift pointing the other way.
+    assert.ok(mustSeal(1059)) // NIP-59 gift wrap — not a kind Quorum emits
+    assert.ok(mustSeal(10050)) // NIP-17 inbox relay list — nobody would read one
   })
 })

@@ -151,21 +151,30 @@ export function isSealed(event: NostrEvent | UnsignedEvent): boolean {
  *
  * There are four reasons to be on this list and no fifth:
  *
- * **Key management** (8110, 38107, and under `mls` 30443, 1059, 10050). A channel
+ * **Key management** (8110, 38107, and under `mls` 30443 and 8111). A channel
  * key wrapped under the channel key is a locked box containing its own key. The
  * policy is what tells a writer to encrypt, so it must be readable by someone who
- * cannot yet decrypt anything. The three `mls` entries are the same argument at
+ * cannot yet decrypt anything. The two `mls` entries are the same argument at
  * the other end of the bootstrap: a KeyPackage is read by people who are *not*
- * in the group, a gift wrap is already sealed to exactly one recipient and
- * re-sealing it to the group would defeat the point of wrapping it, and an inbox
- * relay list has to be readable by whoever is trying to reach you.
+ * in the group, and a Welcome is already encrypted to exactly one recipient —
+ * sealing it to the group as well would mean the one member who needs to read it
+ * is the one member who cannot.
  *
- * Those three were written into the spec during the M10 spec pass and were
- * missing from this table for two commits, which is the drift the note at the
- * bottom of this comment is about — the prose and the enforced list disagreed
- * and nothing failed. Sealing a 30443 would have refused honest traffic in the
- * one moment an agent has no key at all: it could not have joined the channel it
- * was publishing the KeyPackage to join.
+ * Those were written into the spec during the M10 spec pass and were missing
+ * from this table for two commits, which is the drift the note at the bottom of
+ * this comment is about — the prose and the enforced list disagreed and nothing
+ * failed. Sealing a 30443 would have refused honest traffic in the one moment an
+ * agent has no key at all: it could not have joined the channel it was
+ * publishing the KeyPackage to join.
+ *
+ * The spec pass also put 1059 and 10050 on this list, and step 4 of the build
+ * took them off again. Quorum's Welcome is a signed 8111 rather than a NIP-59
+ * gift wrap — see `RegularKinds.MlsWelcome` for the relay policy that forces
+ * that — so no 1059 is ever published here, and with the recipient already a
+ * NIP-29 member of the group being invited to, a NIP-17 inbox list has no
+ * reader. An exceptions table earns its polarity by every entry having a reason;
+ * two entries kept against a transport that was never built would be the same
+ * drift in the opposite direction.
  *
  * **Authorization** (38102 grants, 38106 delegations). Two of these the relay
  * itself enforces — `group:join` and `thread:budget` — so sealing them would
@@ -191,11 +200,10 @@ export function isSealed(event: NostrEvent | UnsignedEvent): boolean {
  * or refuse honest traffic, and neither shows up as an error anywhere.
  */
 export const UNSEALED_KINDS: readonly number[] = Object.freeze([
-  1059, // gift_wrap — NIP-59: the outer layer of an `mls` Welcome, sealed to one recipient already
   7000, // job_feedback — NIP-90: a refusal, from anyone, to anyone
   8108, // checkpoint — relay-authored
   8110, // channel_key — the `nip44` bootstrap
-  10050, // inbox_relays — NIP-17: where to deliver a Welcome, and it is public by design
+  8111, // mls_welcome — the `mls` bootstrap, already encrypted to one recipient
   22242, // client_auth — NIP-42, addressed to the relay
   30443, // mls_key_package — the `mls` bootstrap: read by people who are not in the group
   38101, // thread_state — relay-authored

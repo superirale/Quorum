@@ -20,7 +20,7 @@ import { ArtifactBody, CheckpointBody } from './artifact.ts'
 import { AgentCursorBody, AgentManifestBody, AgentMemoryBody, LeaseBody, PresenceBody } from './agent.ts'
 import { CapabilityGrantBody, DelegationBody } from './capability.ts'
 import { ContextPackRequestBody, ContextPackResultBody, SummaryBody } from './context.ts'
-import { ChannelKeyBody, ChannelPolicyBody } from './encryption.ts'
+import { ChannelKeyBody, ChannelPolicyBody, MlsWelcomeBody } from './encryption.ts'
 import { HandoffBody, ThreadOpBody, ThreadStateBody } from './thread.ts'
 
 export * from './common.ts'
@@ -44,6 +44,7 @@ export const BODY_SCHEMAS = {
   [RegularKinds.Checkpoint]: CheckpointBody,
   [RegularKinds.ThreadOp]: ThreadOpBody,
   [RegularKinds.ChannelKey]: ChannelKeyBody,
+  [RegularKinds.MlsWelcome]: MlsWelcomeBody,
 
   [EphemeralKinds.Interrupt]: InterruptBody,
   [EphemeralKinds.Lease]: LeaseBody,

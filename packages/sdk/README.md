@@ -123,7 +123,8 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 | `channel.ts` | Encrypted channels. `ChannelCrypto` holds whichever epochs this key has been handed and seals or opens on the way past `Publisher`; `rotateChannelKey()` mints an epoch, wraps it for each member and publishes the policy **last**; `channelPolicy()` reads what a channel says it is. `opener()` is the one `OpenSealed` implementation every verifier takes. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 | `archive.ts` | What forward secrecy forces a client to keep. `Archive` holds every event of a channel plus the plaintext this client read out of it, because on `mls` the relay's copy becomes unreadable and the relay is only the transport; `SealedEnvelopes` caches a sealed event before it is published, because a ratchet cannot produce byte-identical retries and `once()` rests on it. Both are plaintext on disk, deliberately — see below. |
-| `mls.ts` | The ratchet: `ts-mls` driven from behind the `mls` envelope, and the only file in the repo that imports an MLS library. `MlsCrypto` is a `ChannelSealer` like `ChannelCrypto` and shares nothing else with it — it holds one evolving state that opens each message *once*, rather than a map of epoch keys that opens anything any number of times. `mlsKeyPackage()` puts the Nostr pubkey in the credential; `create`/`add`/`join` are the ratchet half of membership, and the Nostr half is not built yet. |
+| `mls.ts` | The ratchet: `ts-mls` driven from behind the `mls` envelope, and the only file in the repo that imports an MLS library. `MlsCrypto` is a `ChannelSealer` like `ChannelCrypto` and shares nothing else with it — it holds one evolving state that opens each message *once*, rather than a map of epoch keys that opens anything any number of times. `mlsKeyPackage()` puts the Nostr pubkey in the credential; `create`/`add`/`join` are the ratchet half of membership. |
+| `mls-keys.ts` | The Nostr half of membership, in two kinds. `publishKeyPackage()` puts a KeyPackage in the addressable slot named for the channel; `fetchKeyPackages()` reads them back and refuses the six ways one can lie; `inviteToMls()` commits the Add and then publishes one kind 8111 per invitee; `acceptMlsInvite()` opens the one that is theirs. Nothing here holds a secret the ratchet does not. |
 
 ## Design notes that cost something to learn
 
@@ -303,10 +304,26 @@ forward secrecy means, and it is equally true of the relay's copy.
 nothing in `apps/web` reaches it yet. Worth re-checking when the web surface does: this is the
 kind of property that stops being true quietly.
 
+**A KeyPackage advertises capabilities it cannot name, and `ts-mls` says so in decimal.**
+`defaultCapabilities()` appends GREASE values to `ciphersuites` — RFC 9420 §13.2's exercise of
+unallocated code points, so a receiver that refuses an unknown one is caught early — as decimal
+*strings*, though the field is typed `CiphersuiteName[]`. Looking one up in the registry gives
+`undefined`, the id-list writer correctly refuses it, and the effect was that publishing a
+KeyPackage failed roughly four times in five with a message about 16-bit ids and nothing pointing
+at GREASE. `suiteId()` passes them through rather than dropping them, because being advertised at
+somebody else's reader is the entire point of the exercise. Found by executing code that had
+typechecked for a day.
+
+**Only ciphersuite 1 can be constructed in this repo, which shapes one test rather than the
+code.** `getCiphersuiteImpl` for the P256 suites fails with `CodecError: Length too large to
+encode`, and the CHACHA20POLY1305 suites need `@hpke/chacha20poly1305`, an optional dependency
+that is not installed. So "refuses a ciphersuite this workspace does not speak" cannot generate a
+real foreign package; it forges the `cipherSuite` field on a genuine one, and says so in the test.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 393 tests
+pnpm --filter @quorum/sdk test        # 409 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

@@ -198,7 +198,7 @@ describe('MlsCrypto', () => {
     // who is by definition outside the group.
     const { ada } = await pair()
     assert.deepEqual(ada.crypto.buildOptions(30443), {}, 'MLS KeyPackage')
-    assert.deepEqual(ada.crypto.buildOptions(1059), {}, 'gift-wrapped Welcome')
+    assert.deepEqual(ada.crypto.buildOptions(8111), {}, 'MLS Welcome')
     assert.equal(ada.crypto.buildOptions(BorrowedKinds.ChatMessage).enc, EncMode.Mls)
   })
 

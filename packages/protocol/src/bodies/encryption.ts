@@ -1,5 +1,5 @@
 /**
- * The two kinds that make an encrypted channel possible.
+ * The kinds that make an encrypted channel possible.
  *
  * NIP-44 is pairwise by construction: its conversation key is an ECDH between
  * exactly two keys. A Quorum channel has N members, so "an encrypted channel"
@@ -30,7 +30,7 @@
 
 import { z } from 'zod'
 import { ENC_MODES } from '../tags.ts'
-import { Pubkey, UnixSeconds } from './common.ts'
+import { EventId, Pubkey, UnixSeconds } from './common.ts'
 
 /** Epochs start at 1. Zero would be indistinguishable from a missing field. */
 export const Epoch = z.int().positive().describe('key generation; increments on every rotation')
@@ -116,3 +116,74 @@ export const ChannelKeyBody = z.object({
   recipient: Pubkey,
 })
 export type ChannelKeyBody = z.infer<typeof ChannelKeyBody>
+
+/**
+ * MLS epochs start at **0**, which is the one place `mls` and `nip44` disagree
+ * about a field they share a name for.
+ *
+ * {@link Epoch} above is positive because a `nip44` channel mints its first key
+ * as epoch 1 and zero would be indistinguishable from a missing field. RFC 9420
+ * does not get that choice: a group's first epoch is 0 by specification, so the
+ * first messages of every MLS channel carry `epoch: 0`. `epoch()` in `tags.ts`
+ * required `n > 0` until the M10 step-1 pass and would have read every one of
+ * them as "no epoch", collapsing "I cannot read this" and "I am missing epoch 4"
+ * back into the single sentence the tag exists to split apart.
+ */
+export const MlsEpoch = z.int().nonnegative().describe('MLS group epoch; the first one is 0')
+
+/**
+ * What a Welcome's NIP-44 payload decrypts to: the Welcome and the tree.
+ *
+ * Two fields rather than one because RFC 9420 lets the ratchet tree travel
+ * either inside the Welcome, as a `ratchet_tree` group-context extension, or out
+ * of band — and `ts-mls` takes it as a separate argument to `joinGroup`, which
+ * is the out-of-band path. Sending it here keeps the choice in one place instead
+ * of making every group's extension list load-bearing at join time.
+ *
+ * The tree is encrypted along with the Welcome even though it is not secret in
+ * any strong sense: it carries every member's leaf node, so publishing it in the
+ * clear would hand the relay the exact membership of the ratchet — the one list
+ * that Quorum's two-lists rule says may legitimately differ from the NIP-29 one.
+ * Encrypting it costs nothing, since there is already a payload to put it in.
+ */
+export const MlsInvite = z.object({
+  /** base64 of a framed `mls_welcome` MLSMessage. */
+  welcome: z.string().min(1),
+  /** base64 of the TLS-encoded `RatchetTree` the committer held. */
+  ratchet_tree: z.string().min(1),
+})
+export type MlsInvite = z.infer<typeof MlsInvite>
+
+/**
+ * `mls_welcome` (8111) — one member's way into the ratchet.
+ *
+ * `invite` is a NIP-44 payload from the inviter to the recipient whose plaintext
+ * is an {@link MlsInvite}. The recipient is named by a `to`-marked `p` tag, so
+ * `inbox()` finds it with the addressing filter every other kind uses.
+ *
+ * See the comment on `RegularKinds.MlsWelcome` for why this is a Quorum kind
+ * rather than NIP-59's gift-wrapped 444, and what that costs.
+ */
+export const MlsWelcomeBody = z.object({
+  /** The epoch the group is at as of this Welcome's commit. */
+  epoch: MlsEpoch,
+
+  /** NIP-44 v2 payload, inviter → recipient; plaintext is an {@link MlsInvite} JSON object. */
+  invite: z.string().min(132).describe('base64 NIP-44 payload wrapping the Welcome'),
+
+  /** The member this Welcome is for. Duplicates the `to` tag, which is the routing one. */
+  recipient: Pubkey,
+
+  /**
+   * The kind 30443 event whose KeyPackage this Welcome consumed.
+   *
+   * By id and not by addressable coordinate, because a KeyPackage is
+   * single-use: the coordinate `30443:<pubkey>:<group>` names the recipient's
+   * current publication slot, which by the time this arrives may already hold
+   * the *replacement* they published after being added. The id names the one
+   * that was actually spent, which is what a recipient needs in order to work
+   * out whether this Welcome is for a key they still hold.
+   */
+  key_package: EventId,
+})
+export type MlsWelcomeBody = z.infer<typeof MlsWelcomeBody>
