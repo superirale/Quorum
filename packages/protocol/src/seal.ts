@@ -111,14 +111,31 @@ export function sealEvent(unsigned: UnsignedEvent, key: Uint8Array): UnsignedEve
  * Handing back a string makes the caller decide what to do with it.
  */
 export function openEvent(event: NostrEvent | UnsignedEvent, key: Uint8Array): string {
+  // An `mls` event is refused rather than passed through, and the difference
+  // matters. Passing it through returns the base64 of an MLSMessage as though
+  // it were the body — which is the M9 keyless-packer failure exactly: not an
+  // error, a success full of nonsense, handed to a model or rendered to a human
+  // as the conversation. `openMlsEvent` in `mls.ts` is the other half.
+  if (enc(event.tags) === EncMode.Mls) {
+    throw new Error('seal: this event is sealed with mls; open it with openMlsEvent, not a key')
+  }
   if (enc(event.tags) !== EncMode.Nip44) return event.content
   if (event.content === '') return ''
   return nip44Decrypt(event.content, key)
 }
 
-/** True if this event's content is sealed and needs a key before it means anything. */
+/**
+ * True if this event's content is sealed and needs something before it means anything.
+ *
+ * Both encrypted modes, not just `nip44`. A reader that answered `false` for an
+ * `mls` event would treat base64 as a body everywhere this is used — feeds,
+ * packers, the auditor, `unreadable()` — and none of those would report a
+ * problem. What "something" means differs: a key for `nip44`, the group's
+ * ratchet state for `mls`.
+ */
 export function isSealed(event: NostrEvent | UnsignedEvent): boolean {
-  return enc(event.tags) === EncMode.Nip44 && event.content !== ''
+  const mode = enc(event.tags)
+  return (mode === EncMode.Nip44 || mode === EncMode.Mls) && event.content !== ''
 }
 
 // --- which kinds an encrypted channel seals ---------------------------------

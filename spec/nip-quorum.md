@@ -1162,8 +1162,35 @@ whose plaintext is the body that would otherwise be there. `enc` is `mls` and th
 `epoch` tag carries the **MLS epoch**, which is the same field doing the same job
 it does under `nip44`.
 
-The MLS `group_id` MUST be the 32 bytes of the NIP-29 group id. One channel has
-one identifier, so a reader never has to reconcile two.
+The MLS `group_id` MUST be the UTF-8 bytes of the NIP-29 group id. One channel
+has one identifier, so a reader never has to reconcile two, and a receiver
+selects the group state by `h` rather than by trial decryption. A receiver MUST
+also check the binding in the other direction — that the opened message's
+`group_id` is the one its `h` tag named — because a member of two channels can
+lift a message out of one and republish it into the other, where the relay routes
+it by `h`, the ratchet opens it, and the body lands in a thread it was never sent
+to.
+
+> An earlier draft of this paragraph said "the 32 bytes of the NIP-29 group id",
+> which assumed a group id is 32-byte hex. NIP-29 places no constraint on the
+> string and real ones are human-chosen names. Hashing to a fixed 32 bytes was
+> the alternative and buys nothing: MLS declares `opaque group_id<V>`, of
+> variable length, and a digest would cost the property the rule exists for —
+> that the same identifier is legible in both places.
+
+The `epoch` tag carries the MLS epoch verbatim, is REQUIRED on an `mls` event
+with a non-empty `content`, and MLS counts epochs from **0** at group creation. A
+reader MUST accept `epoch 0`; this is the one place the field differs from
+`nip44`, where a channel key generation is minted from 1. A reader that opens the
+message MUST reject it if the tag and the ciphertext's own epoch disagree —
+otherwise a mislabelled event turns "I am missing epoch 4" into a search for a
+key that was never used, which is the sentence the tag exists to make possible.
+
+The obligation is deliberately asymmetric: a sender MUST write the tag, and a
+reader holding a message it has already opened MUST NOT discard it merely because
+the tag is absent. The epoch is authenticated inside the `MLSMessage` header, so
+an absent tag costs a reader nothing it has not already recovered; it only costs
+the reader who *cannot* open the message the ability to say why.
 
 A relay therefore sees every tag, plus the three fields an MLS `PrivateMessage`
 leaves public: the group id, the epoch, and whether the message is application

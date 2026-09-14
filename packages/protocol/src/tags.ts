@@ -138,11 +138,20 @@ export function enc(tags: readonly Tag[]): EncMode {
   return (ENC_MODES as string[]).includes(value ?? '') ? (value as EncMode) : EncMode.Plaintext
 }
 
+/**
+ * The epoch this event's content was sealed under, if it says.
+ *
+ * Zero is valid, which it was not until M10. A `nip44` channel key generation
+ * is minted from 1, but an MLS epoch is 0 at group creation and counts commits
+ * from there, so rejecting 0 would have made the first messages of an `mls`
+ * group report "no epoch" — and "I cannot read this" and "I am missing epoch 4"
+ * being different sentences is the entire reason this tag exists.
+ */
 export function epoch(tags: readonly Tag[]): number | undefined {
   const value = tagValue(tags, TagName.Epoch)
   if (value === undefined) return undefined
   const n = Number(value)
-  return Number.isInteger(n) && n > 0 ? n : undefined
+  return Number.isInteger(n) && n >= 0 ? n : undefined
 }
 
 export function counter(tags: readonly Tag[]): number | undefined {
