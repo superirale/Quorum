@@ -122,6 +122,7 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 | `interrupt.ts` | Stop. `interrupt()` builds the kind 28101 a human's client publishes; `Interrupts` arms an `AbortSignal` per running action and aborts it when one arrives. `InterruptedError` is how an effect that catches broadly tells "somebody stopped me" from "it broke". Ephemeral, so there is no receipt — see below. |
 | `channel.ts` | Encrypted channels. `ChannelCrypto` holds whichever epochs this key has been handed and seals or opens on the way past `Publisher`; `rotateChannelKey()` mints an epoch, wraps it for each member and publishes the policy **last**; `channelPolicy()` reads what a channel says it is. `opener()` is the one `OpenSealed` implementation every verifier takes. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
+| `archive.ts` | What forward secrecy forces a client to keep. `Archive` holds every event of a channel plus the plaintext this client read out of it, because on `mls` the relay's copy becomes unreadable and the relay is only the transport; `SealedEnvelopes` caches a sealed event before it is published, because a ratchet cannot produce byte-identical retries and `once()` rests on it. Both are plaintext on disk, deliberately — see below. |
 
 ## Design notes that cost something to learn
 
@@ -237,10 +238,30 @@ it is alive.** `PresenceReporter` takes a `Logger` for that reason. It used to s
 `console.warn` regardless of the logger the agent was given, which made every encrypted test a
 wall of warnings — and on an encrypted channel the failure is routine rather than exceptional.
 
+**The archive is plaintext on disk, and that gives back exactly what MLS bought.** Forward
+secrecy says a key compromised today does not open yesterday's traffic; `Archive` says
+yesterday's traffic is in a file next to the key. There is no clever resolution — sealing the
+archive under a local key stores the key beside it, and the cleverness would only hide where the
+plaintext is. So it is a workspace's choice, `prune()` is the mechanism, and the default is to
+keep: an approval nobody can produce in six months is what pillar two exists to prevent.
+
+**Re-recording an event you can no longer read must not erase the plaintext you already have.**
+This is how a client destroys its own archive under `mls`, and it needs no bug to happen: the
+agent restarts, backfills the channel, re-sees every event it archived last month, cannot open
+any of them because the epochs are gone, and writes each one back. One ordinary reconnect, and
+the only readable copy of six weeks of decisions is overwritten by the blob it was made from.
+`Archive.record()` is a method rather than a `store.set` for that one reason.
+
+**An archive that held only what it could read would be a complete-looking lie.** Unreadable
+events are recorded too, with no plaintext, so `unreadable()` can answer "the thread has ten
+events and I can read seven". `opened()` drops the rest and reports how many — handing them back
+sealed would put base64 in front of a model as the conversation, which is the M9 keyless-packer
+failure in a new place.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 344 tests
+pnpm --filter @quorum/sdk test        # 361 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

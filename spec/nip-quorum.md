@@ -1294,6 +1294,32 @@ system of record. An implementation MUST be explicit about where that archive
 lives and how it is protected, because it is now the only copy and it is not
 protected by MLS.
 
+Three rules about that archive, each of which fixes a way of losing it quietly:
+
+- **A re-recorded event MUST NOT overwrite a plaintext already held.** This is
+  the ordinary way an archive is destroyed and it requires no bug: a client
+  restarts, backfills the channel, meets every event it archived last month, can
+  no longer open any of them, and writes each one back as unreadable. Nothing
+  errors and the only readable copy is gone.
+- **The archive MUST record events it could not open**, with no plaintext rather
+  than not at all. "This thread has ten events and I hold seven bodies" is a
+  sentence a reader must be able to say; an archive holding only what it could
+  read presents a complete-looking history with three messages missing from it.
+- **An implementation MUST keep the whole event, not only the body.** The
+  signature is over the sealed bytes and it is the authorship claim, so an
+  archive of plaintexts that relies on a relay still serving the envelopes is not
+  a record of anything.
+
+Retention is the one place any of the forward secrecy can be recovered, and it is
+a workspace's decision rather than a library's: keeping forever preserves the
+audit trail and keeps yesterday's traffic beside today's key, keeping a window
+gives some of the property back, keeping nothing means a restart loses the
+thread. An implementation SHOULD offer a retention window and MUST NOT apply one
+by default; deleting an audit trail on a timer nobody set is not a feature. A
+window SHOULD be measured by the event's `created_at` rather than by when the
+client saw it, or two members who joined a month apart hold different windows of
+the same channel and the workspace's stated retention is true of neither.
+
 Two consequences follow that no library may paper over. A new member gets no
 history at all — not "unless an admin hands over old epochs" as under `nip44`,
 but none, because the keys no longer exist. And an approval chain can be audited

@@ -46,6 +46,7 @@ import {
   channelPolicy,
   rotateChannelKey,
   wrapChannelKey,
+  type PublishOptions,
 } from '../src/index.ts'
 
 const group = 'payments'
@@ -495,11 +496,18 @@ describe('ChannelCrypto', () => {
     })
     await ch.admin.crypto.load()
 
-    const draft = {
+    // `created_at`, not `createdAt`. This said the latter for two milestones,
+    // which `build()` ignored — so both events were stamped with the wall clock
+    // and the test passed on the two calls landing in the same second. It failed
+    // once in a full run and then passed four times, which is exactly how a
+    // timing bug in the idempotency suite would present if the *nonce* were the
+    // random one this test exists to rule out. Excess-property checking does not
+    // fire here because the literal goes through a `const` first.
+    const draft: PublishOptions = {
       kind: Kinds.ChatMessage,
       text: 'deploying api 1.4.2',
       counter: 99,
-      createdAt: 1_700_000_000,
+      created_at: 1_700_000_000,
     }
     const first = await ch.admin.publisher.sign(draft)
     const retry = await ch.admin.publisher.sign(draft)

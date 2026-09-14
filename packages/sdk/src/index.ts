@@ -30,6 +30,7 @@
 export * from './addressing.ts'
 export * from './agent.ts'
 export * from './approval.ts'
+export * from './archive.ts'
 export * from './audit.ts'
 export * from './channel.ts'
 export * from './checkpoints.ts'
