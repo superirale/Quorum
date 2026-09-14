@@ -62,7 +62,10 @@ This NIP defines no chat or threading kinds of its own. It reuses:
 | 22242 | NIP-42 | Relay AUTH. |
 | 9000/9001/9021 | NIP-29 | Put-user, remove-user, join request. See [the two resources the relay owns](#the-two-resources-the-relay-owns). |
 | 39000–39002 | NIP-29 | Group metadata, admins, members. |
-| 443/444/445 | Marmot | MLS KeyPackage, Welcome, Group Event (`mls` mode only). |
+| 30443 | Marmot | MLS KeyPackage, addressable, `d` = 32 random bytes (`mls` only). |
+| 1059 / 13 / 444 | Marmot, NIP-59 | Gift wrap, seal, and the unsigned Welcome rumor inside them (`mls` only). |
+| 10050 | NIP-17 | The account's inbox relay list, where a Welcome is delivered (`mls` only). |
+| 445 | Marmot | Group message. Used only by the [Marmot transport profile](#the-marmot-transport-profile-is-optional), never by a Quorum-native `mls` channel. |
 
 A generic NIP-C7 or NIP-7D client joined to a Quorum workspace therefore sees the
 whole human conversation with no modification.
@@ -644,6 +647,11 @@ relay may withhold events by design. Three layers recover what matters:
    counter of the attempt it is repeating; allocating a fresh one changes the
    bytes, changes the id, and produces the second copy the retry was trying to
    avoid.
+
+   A repeated counter from one author therefore means the key is in two places,
+   which is worth interrupting somebody over. On an `mls` channel that reading is
+   no longer the only one — see
+   [a ratchet cannot repeat itself](#a-ratchet-cannot-repeat-itself).
 2. **NIP-22 `e` tags** — causal structure. A missing parent is detectable because
    you hold its id. Works on any relay.
 3. **8108 `checkpoint`** — a relay-signed Merkle root over the event ids it holds
@@ -810,6 +818,13 @@ into the client. So the same algorithm exists twice, in different languages, and
 the two MUST agree — otherwise "which packer answered" becomes a fact an agent's
 behaviour depends on, and a workspace that turns on encryption quietly changes
 what every agent knows.
+
+On `mls` the packer also loses its source. `gather` is a set of relay filters,
+and under forward secrecy the events they return are no longer openable; the
+client must pack from
+[its own archive](#forward-secrecy-makes-a-channel-unreadable-to-its-own-members)
+instead. The function is unchanged — it is pure in its events — but what a client
+can put into it is now bounded by what it kept.
 
 Agreement is only checkable if packing is a pure function, so `extractive-v1` is
 defined as one:
@@ -981,14 +996,18 @@ a protocol break.
 | --- | --- | --- |
 | `plaintext` | bodies | context packing, indexing, state projection, rate limits |
 | `nip44` | tags only | none |
-| `mls` | nothing | none |
+| `mls` | tags, and the MLS group id and epoch | none |
 
-Under `mls` (Marmot), messages are published under a per-message ephemeral key
-and sender identity lives inside the ciphertext. This breaks `p`-tag addressing
-and per-principal rate limiting, and makes NIP-29 membership redundant with MLS
-group state. Addressing must move inside the ciphertext and loop-breaking becomes
-purely client-side. Implementations MUST NOT claim `mls` support without
-addressing this.
+The two encrypted modes differ in what they defend against, not in strength.
+`nip44` protects a channel's contents from the relay and from anyone the relay
+serves. `mls` additionally gives **forward secrecy** — a key compromised today
+does not open what was said last month — and **post-compromise security**, where
+the next commit heals a group whose member was compromised. Neither hides the
+social graph; see [Privacy](#privacy).
+
+What `mls` costs is history, and the cost is structural rather than an
+implementation gap: see
+[forward secrecy makes a channel unreadable to its own members](#forward-secrecy-makes-a-channel-unreadable-to-its-own-members).
 
 ### `nip44`: a shared channel key, in epochs
 
@@ -1010,6 +1029,8 @@ is for.
 `p`, `e`, `E`, `counter`, `alt` and `enc` itself. An observer therefore keeps the
 social graph: who is in the channel, who answered whom, when, and how often.
 Implementations MUST state this rather than describe `nip44` channels as private.
+A Quorum `mls` channel leaks the same graph, for the same reason; only the
+[Marmot transport profile](#the-marmot-transport-profile-is-optional) hides it.
 
 Two kinds make the mode possible and both stay unsealed:
 
@@ -1071,12 +1092,19 @@ they are private.
 
 | Kinds | Why |
 | --- | --- |
-| 8110, 38107 | key management — the bootstrap must be readable by someone with no key |
+| 8110, 38107, 30443, 1059, 10050 | key management — the bootstrap must be readable by someone with no key |
 | 38102, 38106, 22242 | authorization — a capability nobody can audit is not a capability |
 | 8108, 38101, 7000 | relay-authored — the relay cannot encrypt to a key it does not hold |
 | 9000–9030, 39000–39999 | NIP-29 moderation and metadata, addressed to the relay |
 
-Everything else MUST be sealed on a channel whose policy says `nip44`. A relay
+The three Marmot kinds are unsealed for the same reason 8110 and 38107 are: they
+are how a member with no key gets one. Their *bodies* are not public. A 30443
+KeyPackage is signed public material by design, and a Welcome travels as an
+unsigned kind 444 rumor inside a kind 13 seal inside a kind 1059 gift wrap, which
+is pairwise to the recipient — a different key from the group's, so the wrapper
+being in the clear reveals only that somebody was invited somewhere.
+
+Everything else MUST be sealed on a channel whose policy says `nip44` or `mls`. A relay
 MAY refuse an unsealed content-bearing event on such a channel, and MAY refuse an
 `enc=nip44` tag on a channel with no encryption policy — the second arm matters
 because `enc` being set is what skips body validation, so without it one tag is a
@@ -1125,6 +1153,159 @@ becomes "anyone holding an epoch key can", which is a real subtraction from the
 guarantee in [Approvals](#approvals) and belongs in any implementation's
 documentation.
 
+### `mls`: the same envelope, a different key schedule
+
+An `mls` event is an ordinary Quorum event. The kind, the tags and the signature
+are exactly what they are on a `plaintext` channel; only `content` differs, and
+it holds the base64 of an RFC 9420 `MLSMessage` carrying an application message
+whose plaintext is the body that would otherwise be there. `enc` is `mls` and the
+`epoch` tag carries the **MLS epoch**, which is the same field doing the same job
+it does under `nip44`.
+
+The MLS `group_id` MUST be the 32 bytes of the NIP-29 group id. One channel has
+one identifier, so a reader never has to reconcile two.
+
+A relay therefore sees every tag, plus the three fields an MLS `PrivateMessage`
+leaves public: the group id, the epoch, and whether the message is application
+data or a commit. The sender's leaf index is inside `encrypted_sender_data` and
+is not among them, but the event is signed, so the author is public anyway.
+
+The previous draft of this section said `mls` breaks `p`-tag addressing and
+per-principal rate limiting. **That is a property of Marmot's transport, not of
+MLS.** Marmot publishes each message under a fresh ephemeral key with no tag but
+`h`, which does delete addressing, counters, `alt` and every relay-side control
+at once. Keeping the Quorum envelope keeps all of them, and costs the metadata
+privacy that the ephemeral key buys — the same graph leak `nip44` already has and
+already documents. The trade is stated, not resolved: see
+[the Marmot transport profile](#the-marmot-transport-profile-is-optional).
+
+The third tension, membership, does not dissolve. It is below.
+
+### Authorship is the Nostr signature, not the MLS credential
+
+MLS authenticates a sender to the group. That is strictly weaker than what
+[Approvals](#approvals) promises, on two counts: the attribution is only
+checkable by someone holding the group's ratchet-tree state, and under forward
+secrecy that state is deleted on a schedule. An approval nobody can attribute in
+six months is not an audit record.
+
+So on a Quorum `mls` channel the event is signed by the author's own key, as
+everywhere else, and **the Nostr signature is the authorship claim**. The MLS
+credential is a second, weaker statement about the same fact, and an
+implementation MUST check the two agree: the identity in the sender's MLS
+credential MUST equal the event's `pubkey`, and an event where they differ MUST
+be rejected. Without that check a member can re-publish another member's
+application message under their own signature.
+
+This gives up deniability, deliberately. Anyone who can open the message can
+prove to a third party who wrote it, which is the opposite of what a private
+messaging protocol usually offers and is the whole of pillar two. An
+implementation MUST NOT describe a Quorum `mls` channel as deniable.
+
+Verification is unchanged from `nip44`: check the signature against the sealed
+bytes as published, then open. One rule, both modes.
+
+### Membership on an `mls` channel is two lists
+
+The NIP-29 member list and the MLS ratchet tree answer different questions, and
+an implementation MUST NOT infer either from the other:
+
+- the **relay** decides admission — who may connect, publish and read — from the
+  NIP-29 list alone;
+- a **client** decides who can actually read a message from the ratchet tree
+  alone.
+
+They disagree in both directions, and each disagreement is a real state a
+workspace lands in. Someone in the group and not in the tree can publish and
+reads nothing, which looks exactly like a quiet member; this is the `nip44`
+locked-out case again and an implementation MUST provide a way to see it. Someone
+in the tree and not in the group is worse, because **removing a member at the
+relay is not removing them.** Every Quorum event is valid on any generic relay,
+so a member holding current epoch secrets goes on reading the channel from
+anywhere else it is carried. Only an MLS Remove commit ends that.
+
+Removal is therefore two acts — a Remove commit and a NIP-29 kind 9001 — and an
+implementation MUST NOT present either alone as removal. Order does not affect
+correctness for the remaining members, since the commit reaches them either way.
+
+### A ratchet cannot repeat itself
+
+`once()` rests on a retry rebuilding byte-identical bytes, so the relay's own
+`id`-is-a-content-hash dedupe absorbs it. `nip44` preserves that with a derived
+nonce. **MLS cannot**: the secret tree advances per message, so re-encrypting the
+same body yields different ciphertext and consumes a generation. Naively retried,
+one message becomes two.
+
+A sender MUST therefore persist the sealed envelope before publishing it and
+MUST republish the stored bytes on retry rather than re-sealing. With that, every
+guarantee in [Ordering](#ordering) holds unchanged.
+
+A crash between the ratchet step and that write is still possible, and it
+produces two events from one author bearing the same `counter`. A receiver MUST
+disambiguate by opening them: same counter and the same plaintext under the same
+epoch is a retry whose cache was lost, and MUST be suppressed as a duplicate;
+same counter and different plaintext is the one the counter rule exists for — a
+key in two places — and MUST be reported. This refines the rule in
+[Ordering](#ordering), which treats every repeated counter as the second case.
+
+### Forward secrecy makes a channel unreadable to its own members
+
+This is the cost of `mls`, it is structural, and an implementation MUST state it
+rather than discover it.
+
+MLS deletes the material that decrypts old messages; that is what forward secrecy
+*is*. A member who has kept nothing locally therefore cannot re-read their own
+channel — not because they were removed, but because the ciphertext the relay
+still holds is now noise to everyone. Every mechanism in this document that
+re-reads the log is affected: an agent replaying its thread on restart, a client
+backfilling, a packer gathering a thread for [Context](#context), and an auditor
+walking a chain in [Approvals](#approvals).
+
+A Quorum `mls` client MUST therefore keep its own durable archive of the
+plaintext it has opened, and the relay becomes the transport rather than the
+system of record. An implementation MUST be explicit about where that archive
+lives and how it is protected, because it is now the only copy and it is not
+protected by MLS.
+
+Two consequences follow that no library may paper over. A new member gets no
+history at all — not "unless an admin hands over old epochs" as under `nip44`,
+but none, because the keys no longer exist. And an approval chain can be audited
+only by someone who was in the group at the time and kept what they read, which
+is a further subtraction from
+[auditing a sealed channel](#auditing-a-sealed-channel-requires-a-key): there,
+any keyholder could verify at any time.
+
+### The Marmot transport profile is optional
+
+Marmot specifies a Nostr transport in which a group message is a kind 445 signed
+by a **fresh ephemeral key per event**, carrying exactly one `h` tag whose value
+is a random, rotatable `nostr_group_id`, and — normatively — no other tag but
+NIP-40 `expiration`. Key establishment is a kind 30443 KeyPackage, an unsigned
+kind 444 Welcome rumor inside a kind 13 seal inside a kind 1059 gift wrap, and a
+kind 10050 inbox relay list.
+
+That transport buys metadata privacy: a relay cannot tell members apart, cannot
+tell which channel of a workspace is busy, and cannot link a message to an
+account. Quorum does not adopt it by default because of what the no-tag rule
+deletes along the way — `alt`, `p` addressing, `counter`, `enc`, and with them
+relay-side membership enforcement, per-principal rate limiting, budget
+enforcement and the group anchor that
+[checkpoints](#checkpoints) are cut against. Marmot states the security
+consequence plainly: a non-member can publish an envelope that reaches trial
+decryption.
+
+An implementation MAY offer the profile, and if it does:
+
+- the entire signed Quorum event — every tag included — MUST move inside the
+  ciphertext, and the outer kind 445 MUST be treated as a disposable wrapper
+  carrying no claim about its author;
+- addressing, loop prevention, counters and `alt` rendering become client-side
+  in full, and the relay MUST NOT be relied upon for any of them;
+- a routing rotation splits one channel's history across several `h` values, so a
+  reader MUST keep the routing history and a checkpoint chain MUST follow it;
+- it MUST NOT be described as the same mode. A channel is either Quorum-routed or
+  Marmot-routed, and the two have different threat models.
+
 ## Loop prevention
 
 Addressing plus a channel policy defaulting to `respond_only_when_addressed`
@@ -1154,6 +1335,13 @@ and by the agents' operator humans.
 Nostr has no unpublish. NIP-09 deletion is advisory and a mirrored event is
 permanent. Implementations MUST NOT place secrets or personal data in events, and
 `alt` in particular is plaintext even on encrypted channels (see rule 5 above).
+
+No mode defined here hides the social graph. `plaintext` hides nothing, `nip44`
+and `mls` hide bodies, and all three publish who is in a channel, who answered
+whom, and when. The only construction in this document that hides the graph is
+the [Marmot transport profile](#the-marmot-transport-profile-is-optional), and
+its price is every relay-side control. An implementation MUST NOT describe an
+encrypted Quorum channel as metadata-private.
 
 ## Forward compatibility
 
