@@ -156,6 +156,20 @@ describe('a kind 30443', () => {
     )
   })
 
+  test('refuses one whose `d` is not the channel, because nothing ever retires it', () => {
+    // Marmot randomises `d` and Quorum derives it, and this is the check that
+    // makes the divergence mean something. A package in another slot still
+    // answers the inviter's `#h` query, so it looks perfectly usable; what it
+    // never does is get replaced by the next one this member publishes. The
+    // spent package stays live, an inviter commits an Add against a private
+    // half the joiner has thrown away, and the result is a member in the tree
+    // who can never read the channel.
+    assert.throws(
+      () => parseMlsKeyPackageEvent(keyPackageEvent({ d: '2c7f4b9e' })),
+      /`d` must be the channel id, but this one says "2c7f4b9e" in ops/,
+    )
+  })
+
   test('refuses a protocol version that is not 1.0, and says both numbers', () => {
     const event = keyPackageEvent({
       tags: mlsKeyPackageTags({ ref, ...capabilities }).map((t) =>

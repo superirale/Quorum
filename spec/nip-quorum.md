@@ -1032,11 +1032,13 @@ Implementations MUST state this rather than describe `nip44` channels as private
 A Quorum `mls` channel leaks the same graph, for the same reason; only the
 [Marmot transport profile](#the-marmot-transport-profile-is-optional) hides it.
 
-Two kinds make the mode possible and both stay unsealed:
+Four kinds make the encrypted modes possible and all of them stay unsealed:
 
 - **`channel_policy` (38107)**, addressable with `d` = the group id, published by
-  an owner or an admin. Body: `enc`, `epoch` (REQUIRED when `enc` is not
-  `plaintext`), optional `reason` and `changed_at`. It is the event that tells a
+  an owner or an admin. Body: `enc`, `epoch` (REQUIRED when `enc` is `nip44`,
+  and MUST NOT be present when `enc` is `mls` — see
+  [below](#an-mls-policy-states-no-epoch)), optional `reason` and `changed_at`.
+  It is the event that tells a
   writer to encrypt, so it MUST be readable by somebody who cannot yet decrypt
   anything. `reason` is in the clear on purpose: a rotation is usually a removal,
   and "who lost access when" is the fact an audit needs and an encrypted channel
@@ -1056,6 +1058,22 @@ Two kinds make the mode possible and both stay unsealed:
   `mls_private_message` MLSMessage), and `adds` (the pubkeys the committer claims
   it is adding, which a receiver MUST NOT trust). No `to` tag: it is a broadcast
   to the whole channel. See [the commit](#the-commit-must-be-broadcast).
+
+**An 8110 and an 8111 each name exactly one recipient, and name them twice.** The
+`to`-marked `p` tag MUST be present, there MUST NOT be a second one, and it MUST
+equal the body's `recipient`. A relay SHOULD refuse an event that breaks any of
+the three, and it can check all of them from the envelope, which is what keeps
+the rule enforceable on a channel whose bodies nobody at the relay can read.
+
+Each arm fails silently, which is why all three are MUSTs rather than advice. No
+`to` tag and the event is invisible: `#p` is how every reader locates key
+material, so an unaddressed Welcome is stored, valid, and never found by the one
+member it was for. Two `to` tags and both readers fetch it, one opens it, and the
+other is required by the rule below to conclude it was not theirs — so a member
+who *was* owed one waits for a Welcome that was, from where they sit, never sent.
+And a tag that disagrees with `recipient` routes the payload to somebody who
+cannot open it, surfacing as a NIP-44 MAC failure, which is indistinguishable
+from tampering. In all three the issuer believes the key was handed over.
 
 `supersedes` is how a member notices they were skipped: holding epoch 2 and
 being handed epoch 4 marked `supersedes: 3` says a rotation happened that nobody
@@ -1236,6 +1254,58 @@ already documents. The trade is stated, not resolved: see
 
 The third tension, membership, does not dissolve. It is below.
 
+#### An `mls` policy states no epoch
+
+A 38107 with `enc: mls` **MUST NOT** carry `epoch`, and a reader MUST reject one
+that does. This is the one field a channel policy has that `mls` cannot supply.
+
+`epoch` exists to tell a writer which key to seal under *right now*. On `nip44`
+an admin knows that, because the admin mints the key and wraps it; on `mls`
+nobody does. The epoch is a property of the ratchet, advanced by every commit any
+member makes, and a commit is a message the relay stores and nobody re-publishes
+a policy for. So a number written here is stale the instant somebody is added,
+and stale in the damaging direction: a client that believed it would seal at an
+epoch the group has already left, producing messages every other member drops.
+Absent is the only value that cannot be wrong.
+
+This also removes an inconsistency that would otherwise be unresolvable. `epoch`
+is a positive integer, because a `nip44` generation is minted from 1 to keep
+"generation zero" distinguishable from a missing field — so an `mls` policy could
+not have stated epoch 0, the epoch every MLS group begins at, even if the field
+had been the right place for it.
+
+The same asymmetry reaches the `epoch` *tag*, where the rule is the opposite one:
+the tag is per message and authenticated inside the ciphertext, so it is REQUIRED
+and may legitimately read `0`. A relay checking the tag's floor MUST therefore
+take it from the channel's mode — 0 on `mls`, 1 on `nip44` — rather than applying
+one minimum to both. Applied uniformly at 1, the floor refuses the opening
+messages of every MLS channel it will ever host, and does so with an error about
+a number RFC 9420 requires.
+
+#### What a relay enforces on an `mls` channel
+
+Everything a relay does here it does from the envelope and from `epoch`, the one
+JSON field this spec deliberately leaves in the clear. A relay implementing this
+spec MUST NOT parse `MLSMessage`s, and needs no MLS code to do the job RFC 9420
+gives a delivery service: store, route, order.
+
+- **Store.** The `enc=mls` tag is refused on a channel with no `mls` policy, and
+  a kind that [must be sealed](#which-kinds-stay-in-the-clear) is refused in the
+  clear on one that has it — the same two rules as `nip44`, unchanged.
+- **Route.** A 30443 whose `d` is not its `h`, and an 8111 addressed to more than
+  one member, are both refused. Both are addressing failures that no other layer
+  reports, because both produce a member in good standing who reads nothing.
+- **Order.** At most one 8112 per group per epoch is stored, and the rest refused;
+  see [the commit](#the-commit-must-be-broadcast). A relay MAY bound how far back
+  it looks, because the rule is a SHOULD and correctness never rests on it: the
+  same channel on a generic relay is serialised by nobody, so a receiver settles
+  ties on the lowest event id regardless of who is carrying it.
+
+What a relay MUST NOT attempt is any statement about whether a commit is valid,
+whether the committer was in the tree, or whether a ciphertext opens. Those are
+decidable only by members, and a relay that guessed would either refuse honest
+traffic or certify a forgery, in a language nobody can appeal.
+
 ### Authorship is the Nostr signature, not the MLS credential
 
 MLS authenticates a sender to the group. That is strictly weaker than what
@@ -1366,6 +1436,13 @@ Quorum diverges from Marmot in three places, each for a stated reason:
   exactly one channel. An inviter can then fetch a specific member instead of
   scanning the workspace, and addressable replacement does the single-use
   bookkeeping: publishing the next KeyPackage into the slot retires the spent one.
+  A 30443 whose `d` is not its `h` MUST be rejected, by readers and by relays, and
+  the reason is that single-use is *only* enforced by that replacement. A package
+  in a foreign slot still answers the `#h` query an inviter makes, so it looks
+  entirely usable, while the member's next package lands elsewhere and never
+  supersedes it. The spent one stays live indefinitely; an inviter commits an Add
+  against a private half the joiner discarded long ago; and the joiner ends up in
+  the ratchet tree, counted as a member by everyone, able to read nothing.
 - **No `app_components` and no account-identity-proof.** Marmot requires a
   `marmot.member.account-identity-proof.v2` entry in the leaf's app data, and the
   requirement is specific to its transport: under a per-message ephemeral key the

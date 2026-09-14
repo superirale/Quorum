@@ -244,6 +244,11 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		policy.RejectImplausibleTimestamps(cfg.ClockSkew),
 		policy.RejectRelaySignedForgeries(pubkey, relaySignedKinds),
 		policy.ValidateQuorumEvent(index),
+		// The `mls` arm, such as it is: two tag checks that need no state. The
+		// commit serialiser is further down, with the rest of the policies that
+		// read the store.
+		policy.RequireKeyPackageSlot(),
+		policy.RequireOneWelcomeRecipient(index),
 		// Last, because these are the only policies that read the database. An
 		// event that is malformed, out of range or from a stranger has already
 		// been refused without touching a disk.
@@ -254,6 +259,7 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		policy.RejectWorkOnPausedThread(db, projector.PublicKey()),
 		encryption.RequireGrantToSetChannelPolicy(authority),
 		encryption.RequirePolicyEncMode(),
+		policy.SerialiseCommits(db),
 	)
 
 	if cfg.EventsPerMinute > 0 {

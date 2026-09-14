@@ -172,6 +172,24 @@ export function parseMlsKeyPackageEvent(event: NostrEvent | UnsignedEvent): MlsK
 
   const slot = tagValue(event.tags, TagName.Identifier)
   if (slot === undefined) throw new Error('mls: a KeyPackage event needs a `d` tag')
+  // The divergence from Marmot is only worth anything if it is enforced. A
+  // Quorum `d` is the channel id so that `30443:<pubkey>:<channel>` names
+  // exactly one member's current KeyPackage — which is where the single-use
+  // bookkeeping comes from, since publishing the next one into that slot
+  // retires the spent one by addressable replacement.
+  //
+  // A package in some other slot still answers the `#h` query an inviter makes,
+  // so it looks fetchable and usable; what it does not do is get retired. The
+  // member's next KeyPackage lands elsewhere, the spent one stays live forever,
+  // and an inviter picks it up and commits an Add against a private half the
+  // joiner may have discarded — producing a member in the tree who can never
+  // read the channel, which is the failure this whole section exists to avoid.
+  if (slot !== group) {
+    throw new Error(
+      `mls: a KeyPackage's \`d\` must be the channel id, but this one says "${slot}" in ${group}; ` +
+        'a package in another slot is never retired by the one that replaces it',
+    )
+  }
 
   const version = tagValue(event.tags, TagName.MlsProtocolVersion)
   if (version !== MLS_PROTOCOL_VERSION) {

@@ -25,7 +25,22 @@ const (
 	TagAction     = "action"
 )
 
-const EncPlaintext = "plaintext"
+// The three encryption modes, named because this relay treats them
+// differently, not because it decides what they are.
+//
+// The set of *valid* modes is read from schemas/index.json like everything else
+// — ValidEncMode is the only thing that answers "is this a mode" — and these
+// constants are the subset the policy code compares against. That distinction
+// matters because a comparison against a mistyped literal is not an error
+// anywhere: `mode == "m1s"` is simply a branch that never runs, so a relay with
+// a typo here would go on accepting events it believes it is checking. Index
+// startup confirms all three are in the published table, so a rename in the
+// protocol package stops the relay rather than silently disabling an arm of it.
+const (
+	EncPlaintext = "plaintext"
+	EncNip44     = "nip44"
+	EncMls       = "mls"
+)
 
 // ValidateEnvelope applies the Quorum tag rules to an event.
 //

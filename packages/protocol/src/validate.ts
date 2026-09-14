@@ -127,6 +127,13 @@ export const REQUIREMENTS: Readonly<Record<number, Requirements>> = Object.freez
   // into a conversation. `addressed` is what makes the recipient findable with
   // the same `#p` filter everything else uses.
   [RegularKinds.ChannelKey]: { addressed: true },
+  // The `mls` twin of 8110, and it was missing this row for as long as it has
+  // existed. An 8111 nobody is addressed by is a Welcome the recipient cannot
+  // find: `inbox()` and every other reader locates one with `#p`, so an
+  // unaddressed Welcome is stored, valid, and invisible to the one member who
+  // needs it — which presents as an invitee waiting forever for a Welcome that
+  // was published.
+  [RegularKinds.MlsWelcome]: { addressed: true },
   [EphemeralKinds.Interrupt]: { threaded: true },
   [EphemeralKinds.Lease]: { threaded: true },
   [EphemeralKinds.Presence]: {},
@@ -380,6 +387,74 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
           'steer_without_instruction',
           'a steer with no instruction tells an agent to change course without saying to what',
           'content.instruction',
+        ),
+      )
+    }
+  }
+
+  // A wrapped key and a Welcome are each for exactly one member, and each says
+  // so twice: once in a `to`-marked `p` tag, which is how a reader finds it, and
+  // once in `recipient`, which is what the issuer signed. The two must agree.
+  //
+  // Disagreement is not a tidiness problem. The tag is the routing fact and the
+  // body is the authorised one, so an 8110 addressed to Bob with
+  // `recipient: cat` hands Bob a payload he cannot open and hands nobody the
+  // one Cat was promised — and the failure surfaces as a NIP-44 MAC error,
+  // which is the same thing tampering looks like. Two `to` tags are the same
+  // bug wearing a different hat: both readers fetch it, one opens it, and the
+  // other cannot tell "not mine" from "somebody altered this".
+  if (kind === RegularKinds.ChannelKey || kind === RegularKinds.MlsWelcome) {
+    const to = addressees(tags)
+    if (to.length > 1) {
+      issues.push(
+        err(
+          'many_recipients',
+          `a wrapped key is for one member; this one is addressed to ${to.length}. Publish one event per recipient`,
+          'p',
+        ),
+      )
+    } else if (to.length === 1 && body.recipient && to[0] !== body.recipient) {
+      const addressed = to[0]!.slice(0, 8)
+      const named = String(body.recipient).slice(0, 8)
+      issues.push(
+        err(
+          'recipient_mismatch',
+          `addressed to ${addressed}… but the body says ${named}…; the reader who finds it is not the one who can open it`,
+          'content.recipient',
+        ),
+      )
+    }
+  }
+
+  if (kind === AddressableKinds.ChannelPolicy) {
+    // `epoch` says which key a writer should be encrypting under *right now*,
+    // and on an `mls` channel no policy event can answer that. The MLS epoch is
+    // a property of the ratchet, advanced by every commit any member makes, and
+    // the relay stores commits it cannot read — so a number written here is
+    // stale the instant anybody adds a member, and it is stale in the direction
+    // that matters: a client that believed it would seal at an epoch the group
+    // has already left.
+    //
+    // Absent is therefore the only honest value, and it also sidesteps a
+    // narrower defect: `Epoch` is positive because a `nip44` generation is
+    // minted from 1, so an `mls` policy could not state epoch 0 — the first
+    // epoch of every MLS group — even if it wanted to.
+    if (body.enc === 'mls') {
+      if (body.epoch !== undefined) {
+        issues.push(
+          err(
+            'mls_policy_epoch',
+            'an mls channel policy must not state an epoch: the ratchet is the only thing that knows it, and a commit from any member makes this number wrong',
+            'content.epoch',
+          ),
+        )
+      }
+    } else if (body.enc === 'nip44' && body.epoch === undefined) {
+      issues.push(
+        err(
+          'missing_epoch',
+          'a nip44 channel policy must state the epoch writers should seal under, or nobody can tell a rotation from a missing key',
+          'content.epoch',
         ),
       )
     }

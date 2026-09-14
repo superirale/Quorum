@@ -143,6 +143,19 @@ func Load(dir string) (*Index, error) {
 	for _, mode := range index.Envelope.EncModes {
 		index.encModes[mode] = true
 	}
+	// The policy code branches on all three by name, and a branch that compares
+	// against a mode the protocol has renamed is not an error — it is a check
+	// that quietly never fires. Refuse to start instead, which is the same
+	// stance ConfirmResourceNames takes for the resource strings and for the
+	// same reason: a silently disabled check is worse than no check, because
+	// the relay goes on reporting that it enforces one.
+	for _, mode := range []string{EncPlaintext, EncNip44, EncMls} {
+		if !index.encModes[mode] {
+			return nil, fmt.Errorf(
+				"this relay has policies for enc mode %q, which the protocol index does not publish; it publishes %v",
+				mode, index.Envelope.EncModes)
+		}
+	}
 
 	index.unsealed = make(map[int]bool, len(index.Envelope.UnsealedKinds))
 	for _, key := range index.Envelope.UnsealedKinds {

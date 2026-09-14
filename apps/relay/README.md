@@ -93,23 +93,29 @@ actor's role · deleted events stay deleted · `previous` tag checking.
    workspace turned encryption on. That skip is exactly why policy 13 checks the
    other direction too: without it, `enc=nip44` on a plaintext channel is a
    one-tag bypass of the whole schema.
-7. `RejectForeignActionTransitions` — only the pubkey that published an action's
+7. `RequireKeyPackageSlot` — a kind 30443's `d` must be the channel in its `h`.
+8. `RequireOneWelcomeRecipient` — a kind 8111 may address at most one member.
+9. `RejectForeignActionTransitions` — only the pubkey that published an action's
    `proposed` may advance it.
-8. `RejectUnaskedApprovals` — an 8103 must answer an 8102, in the same group,
-   from a pubkey that 8102 addressed, echoing its `input_digest`.
-9. `RequireGrantToJoin` — a kind 9021 join request needs a `group:join` grant
-   from an owner or admin of that group. See [Membership](#membership).
-10. `RequireGrantToSetBudget` — a `set_budget` thread op needs `thread:budget`.
+10. `RejectUnaskedApprovals` — an 8103 must answer an 8102, in the same group,
+    from a pubkey that 8102 addressed, echoing its `input_digest`.
+11. `RequireGrantToJoin` — a kind 9021 join request needs a `group:join` grant
+    from an owner or admin of that group. See [Membership](#membership).
+12. `RequireGrantToSetBudget` — a `set_budget` thread op needs `thread:budget`.
     Every other op stays open to members.
-11. `RejectWorkOnPausedThread` — a kind 8101 whose status is `proposed` or
+13. `RejectWorkOnPausedThread` — a kind 8101 whose status is `proposed` or
     `running` is refused in a thread the projection says is `paused`. See
     [Thread state](#thread-state) for what it must *not* refuse.
-12. `RequireGrantToSetChannelPolicy` — a kind 38107 needs `channel:encrypt`, or
+14. `RequireGrantToSetChannelPolicy` — a kind 38107 needs `channel:encrypt`, or
     a role. See [Encryption](#encryption).
-13. `RequirePolicyEncMode` — the channel's stated mode, enforced in both
+15. `RequirePolicyEncMode` — the channel's stated mode, enforced in both
     directions.
+16. `SerialiseCommits` — at most one kind 8112 per group per epoch.
 
-The last seven are last because they are the only policies that read the
+Policies 7 and 8 are the whole of the `mls` arm that needs no state; 16 is the
+rest of it. See [MLS channels](#mls-channels).
+
+The last eight are last because they are the only policies that read the
 database. An event that is malformed, out of range or from a stranger has
 already been refused without touching a disk.
 
@@ -120,6 +126,11 @@ request it has not got would break federation to catch nothing, since whoever
 forged it can simply publish the request too. The SDK's auditor makes no such
 allowance — it is handed the whole chain and is the party being asked to act on
 the answer.
+
+`SerialiseCommits` fails open for the same reason, and one more: an unreachable
+store is already an outage, and turning it into "no member may change the
+membership of any channel" adds a second one while catching nothing the
+receiver-side tie-break does not already handle.
 
 The three capability policies — join, budget, channel policy — **fail closed**,
 and the asymmetry is not an inconsistency. They ask a different question. "I have not seen the request
@@ -384,10 +395,17 @@ error; the channel is simply less private than its policy says.
 
 | On a channel whose policy says | It refuses |
 | --- | --- |
-| `nip44` | a content-bearing sealable kind tagged anything but `nip44` |
-| `nip44` | an **unsealed** kind (a grant, a policy, a key wrap) tagged `enc=nip44` |
-| `nip44` | a sealed event with no `epoch` tag, or a non-positive one |
-| `plaintext` (or none) | anything tagged `enc=nip44` at all |
+| `nip44` or `mls` | a content-bearing sealable kind tagged anything but that mode |
+| `nip44` or `mls` | an **unsealed** kind (a grant, a policy, a key wrap, a commit) tagged `enc` |
+| `nip44` | a sealed event with no `epoch` tag, or one below 1 |
+| `mls` | a sealed event with no `epoch` tag, or one below **0** |
+| `plaintext` (or none) | anything tagged `enc` at all |
+
+**The epoch floor is per mode and that is not a detail.** A `nip44` generation is
+minted from 1 so that zero stays distinguishable from a missing field; an MLS
+group is at epoch **0** from creation until its first commit. One floor of 1 over
+both refuses the opening messages of every MLS channel this relay will ever host,
+citing a number RFC 9420 requires — which is what it did until M10 step 6.
 
 Two of those need their own justification. The `plaintext` arm exists because
 `ValidateQuorumEvent` skips body validation whenever `enc` is set, so without it
@@ -449,6 +467,58 @@ older build, a paste into the wrong window — and not the betrayal.
 `examples/sealed-channel live` runs all of this as pairs, a plaintext group and
 an encrypted one against one relay in one run.
 
+## MLS channels
+
+`internal/policy/mls.go`, and **it contains no MLS code — that is the property,
+not the limitation.** RFC 9420 assumes a *delivery service* that stores, routes
+and orders messages it cannot read, and the three policies here are those three
+jobs done from the envelope plus one JSON field this protocol deliberately leaves
+in the clear. A relay that parsed `MLSMessage`s would be a second implementation
+of a wire format, in a second language, obliged to agree with `ts-mls` forever;
+the first disagreement would present as a workspace whose members cannot talk to
+each other.
+
+- **`RequireKeyPackageSlot`** — a kind 30443's `d` must equal its `h`. Single-use
+  is enforced by nothing but addressable replacement: the next KeyPackage a member
+  publishes retires the last one because they share a slot. A package in a foreign
+  slot is never retired, yet still answers the `#h` query an inviter makes, so it
+  looks perfectly usable. The inviter commits an Add against a private half the
+  joiner discarded, and the joiner lands in the ratchet tree counted as a member
+  by everyone and able to read nothing.
+- **`RequireOneWelcomeRecipient`** — a kind 8111 may address at most one member.
+  (At least one is already required by the envelope table, which is the other end
+  of the same rule.) A Welcome carries key material sealed to one member's
+  KeyPackage, so a second addressee fetches it, finds no secrets of theirs in it,
+  and is required by the spec to read that as "not mine" rather than as an error.
+  They are told nothing, and the member who was owed a Welcome waits for one that
+  was, from where they sit, never sent.
+- **`SerialiseCommits`** — at most one kind 8112 per group per epoch. Two members
+  holding the same epoch may both commit and MLS lets exactly one of them become
+  the next epoch; nothing in the protocol picks the winner, so a delivery service
+  does. First stored wins, which is arbitrary on purpose — what matters is that
+  every member picks the same one. The loser is stranded at the old epoch by the
+  ordinary "a commit was missed" rule and must be re-added, which is the correct
+  outcome: a committer whose commit was refused has not moved, and knows it.
+
+The epoch comes from the 8112's JSON body, in the clear, which is exactly why
+this file can be three refusals long. It is not trusted for anything but
+serialisation — a committer that lies about its epoch blocks or loses a slot it
+cannot use, because the members who *apply* commits read the epoch out of the
+ciphertext, where a liar cannot reach it.
+
+The scan is bounded at the newest 500 commits in the channel, and a channel with
+more could admit a second 8112 for an epoch buried below that. Acceptable because
+the rule is a SHOULD and correctness never rests on it: every Quorum event is
+valid on a generic relay, which serialises nothing at all, so a receiver settles
+ties deterministically on the lowest event id regardless of who is carrying the
+channel.
+
+What this relay will not attempt is any statement about whether a commit is
+valid, whether the committer was in the tree, or whether a ciphertext opens.
+Those are decidable only by members. See *Membership on an `mls` channel is two
+lists* in the spec: the relay decides admission, the ratchet decides readership,
+and neither may be inferred from the other.
+
 ## Notes for the SDK (M3)
 
 **A filter scoped only by `#p` is rejected.** relay29's
@@ -486,6 +556,10 @@ matched nothing. Read `Subscription.ClosedReason`.
   workspace nobody works in — but it means `thread_op` is not uniformly gated,
   and the day one of the other ops becomes consequential it will need its own
   resource.
+- **Commit serialisation is bounded and therefore best-effort.** See
+  [MLS channels](#mls-channels): a channel with more than 500 commits could admit
+  a second 8112 for an epoch below the scan. The receiver-side tie-break is what
+  correctness actually rests on, here and on every generic relay.
 - **Checkpoints prove withholding, not deletion.** A relay that honours a NIP-09
   delete request for an event it has already committed to will fail its own
   checkpoint from then on, and there is no way to distinguish that from

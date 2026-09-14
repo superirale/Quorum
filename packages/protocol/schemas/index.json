@@ -89,7 +89,9 @@
     "8111": {
       "name": "MlsWelcome",
       "body": "body-8111-mls-welcome.json",
-      "requires": {}
+      "requires": {
+        "addressed": true
+      }
     },
     "8112": {
       "name": "MlsCommit",

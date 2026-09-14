@@ -68,9 +68,17 @@ type EncryptionPolicies struct {
 	known map[string]channelEncryption
 }
 
+// channelEncryption is the mode and nothing else.
+//
+// It cached the policy's `epoch` too, until M10, and nothing ever read it — a
+// field that looks like enforcement and is not. Removing it is not tidying: on
+// an `mls` channel there is no epoch a 38107 could honestly state, because the
+// ratchet advances on every commit and the relay cannot read one, so the
+// protocol now refuses an `mls` policy that carries the field at all. A relay
+// holding a cached copy of a number the spec says must not exist is one
+// refactor away from comparing against it.
 type channelEncryption struct {
-	enc   string
-	epoch int
+	enc string
 }
 
 func NewEncryptionPolicies(index *protocol.Index, store Lookup) *EncryptionPolicies {
@@ -160,12 +168,31 @@ func (e *EncryptionPolicies) RequirePolicyEncMode() func(context.Context, *nostr
 			return true, "invalid: a sealed event must carry an `epoch` tag naming the key it was " +
 				"sealed under, or a reader missing that key cannot tell which one to ask for"
 
-		} else if n, err := strconv.Atoi(at); err != nil || n <= 0 {
-			return true, fmt.Sprintf("invalid: epoch must be a positive integer, got %q", at)
+		} else if n, err := strconv.Atoi(at); err != nil || n < lowestEpoch(policy.enc) {
+			return true, fmt.Sprintf(
+				"invalid: on a %s channel the epoch is an integer of at least %d, got %q",
+				policy.enc, lowestEpoch(policy.enc), at)
 		}
 
 		return false, ""
 	}
+}
+
+// lowestEpoch is where each mode starts counting, and the two modes disagree.
+//
+// A nip44 channel mints its first key as generation 1, deliberately, so that
+// zero stays distinguishable from a missing field. RFC 9420 gives MLS no such
+// choice: a group is at epoch 0 the moment it is created, and stays there until
+// the first commit. This relay refused epoch 0 outright until M10, which would
+// have rejected the opening messages of every MLS channel it ever hosted — with
+// "epoch must be a positive integer", about a number the spec requires. It is
+// the Go twin of the `epoch()` bug found in packages/protocol/src/tags.ts, and
+// both were written before anything published an MLS event.
+func lowestEpoch(mode string) int {
+	if mode == protocol.EncMls {
+		return 0
+	}
+	return 1
 }
 
 // RequireGrantToSetChannelPolicy gates kind 38107.
@@ -278,7 +305,7 @@ func (e *EncryptionPolicies) readPolicy(ctx context.Context, group string) chann
 	var best *nostr.Event
 	var bestMode string
 	for event := range results {
-		mode, _, ok := decodeChannelPolicy(event)
+		mode, ok := decodeChannelPolicy(event)
 		if !ok {
 			continue
 		}
@@ -293,19 +320,17 @@ func (e *EncryptionPolicies) readPolicy(ctx context.Context, group string) chann
 		return plaintext
 	}
 
-	_, epoch, _ := decodeChannelPolicy(best)
-	return channelEncryption{enc: bestMode, epoch: epoch}
+	return channelEncryption{enc: bestMode}
 }
 
-func decodeChannelPolicy(event *nostr.Event) (mode string, epoch int, ok bool) {
+func decodeChannelPolicy(event *nostr.Event) (mode string, ok bool) {
 	var body struct {
-		Enc   string `json:"enc"`
-		Epoch int    `json:"epoch"`
+		Enc string `json:"enc"`
 	}
 	if json.Unmarshal([]byte(event.Content), &body) != nil || body.Enc == "" {
-		return "", 0, false
+		return "", false
 	}
-	return body.Enc, body.Epoch, true
+	return body.Enc, true
 }
 
 func firstTag(event *nostr.Event, name string) string {

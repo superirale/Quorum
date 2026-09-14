@@ -562,6 +562,94 @@ describe('interrupts and spend', () => {
   })
 })
 
+describe('handing a member a key', () => {
+  // 8110 and 8111 are the same shape in two encryption modes: one member's way
+  // in, addressed to them, naming them again in the body.
+  const CAT = 'c'.repeat(64)
+  const PAYLOAD = 'A'.repeat(140)
+
+  const welcome = (over: Record<string, unknown>) =>
+    stub(
+      build({
+        kind: RegularKinds.MlsWelcome,
+        pubkey: ADA,
+        group: GROUP,
+        counter: 1,
+        body: {
+          epoch: 1,
+          invite: PAYLOAD,
+          recipient: BOT,
+          key_package: 'a'.repeat(64),
+        },
+        ...over,
+      } as Parameters<typeof build>[0]),
+    )
+
+  test('a Welcome nobody is addressed by is invisible to the member it is for', () => {
+    // Not an error anyone would see at publish time: the relay stores it, the
+    // signature verifies, the body is well formed. It is simply never returned
+    // by the `#p` filter every reader uses, so the invitee waits forever for a
+    // Welcome that was published a week ago.
+    assert.ok(errorCodes(welcome({})).includes('not_addressed'))
+    assert.deepEqual(errorCodes(welcome({ to: [BOT] })), [])
+  })
+
+  test('the tag that routes it and the body that names it must agree', () => {
+    const crossed = welcome({ to: [CAT] })
+    assert.ok(errorCodes(crossed).includes('recipient_mismatch'))
+  })
+
+  test('one member per event, because the second reader cannot tell why it failed', () => {
+    const both = welcome({ to: [BOT, CAT] })
+    assert.ok(errorCodes(both).includes('many_recipients'))
+  })
+
+  test('the same rule holds for a nip44 channel key', () => {
+    const key = stub(
+      build({
+        kind: RegularKinds.ChannelKey,
+        pubkey: ADA,
+        group: GROUP,
+        to: [CAT],
+        counter: 1,
+        body: { epoch: 2, key: PAYLOAD, recipient: BOT },
+      }),
+    )
+    assert.ok(errorCodes(key).includes('recipient_mismatch'))
+  })
+})
+
+describe('a channel policy states an epoch only where one can be known', () => {
+  const policy = (body: Record<string, unknown>) =>
+    stub(
+      build({
+        kind: AddressableKinds.ChannelPolicy,
+        pubkey: ADA,
+        group: GROUP,
+        d: GROUP,
+        counter: 1,
+        body,
+      }),
+    )
+
+  test('an mls policy must not carry one', () => {
+    // The ratchet advances on every commit by any member, and the relay stores
+    // commits it cannot read. A number here is stale the moment somebody adds
+    // a member, and stale in the direction that locks a writer out.
+    assert.ok(errorCodes(policy({ enc: 'mls', epoch: 1 })).includes('mls_policy_epoch'))
+    assert.deepEqual(errorCodes(policy({ enc: 'mls' })), [])
+  })
+
+  test('a nip44 policy must', () => {
+    assert.ok(errorCodes(policy({ enc: 'nip44' })).includes('missing_epoch'))
+    assert.deepEqual(errorCodes(policy({ enc: 'nip44', epoch: 1 })), [])
+  })
+
+  test('and plaintext is silent either way, because there is no key to name', () => {
+    assert.deepEqual(errorCodes(policy({ enc: 'plaintext' })), [])
+  })
+})
+
 describe('the golden transcript', () => {
   test('every event verifies', () => {
     for (const event of fixture.events) {
