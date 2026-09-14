@@ -9,7 +9,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { describe, it } from 'vitest'
 import { ago, describe as line, hue, short, until } from '../src/format.ts'
 
 const NOW = 1_800_000_000

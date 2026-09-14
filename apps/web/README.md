@@ -187,17 +187,43 @@ the whole channel, which is why it does not notice; anything narrowing its filte
 ## Tests
 
 ```bash
-pnpm --filter @quorum/web test        # the pure modules
+pnpm --filter @quorum/web test        # 54 tests, vitest + jsdom
 pnpm --filter @quorum/web typecheck
 pnpm --filter @quorum/web build       # proves the SDK bundles for a browser
 ```
 
-There is no DOM test runner here yet. The logic worth asserting on — type-preserving field
-edits, finding the proposal behind a request, and saying when something happened — is in plain
-modules that Node can run, and the rest is markup best checked by clicking it. Everything the
-components *decide* lives in the SDK (`inbox`, `threads`, `presence`, `summariseGrants`,
-`verifyActionChains`, `conclusion`) and is tested there, which is also why the console agrees
-with this client rather than merely resembling it.
+**This is the one package that does not use `node --test`, and the reason is narrow.** Node
+strips TypeScript types; it does not *transform* syntax, and JSX is a transform. A `.tsx` file
+cannot be imported by `node --test` at all, which is why these four screens went from M5 to M9
+with no runner. Vitest is the smallest thing that fixes it, because `@vitejs/plugin-react` was
+already a dependency: a component that passes a test here compiled through the same pipeline
+the browser gets. `jsdom` rather than a real browser because none of these claims are about
+rendering — they are about what the screen *says*, and that is decided by the DOM.
+
+Everything the components *decide* still lives in the SDK (`inbox`, `threads`, `presence`,
+`summariseGrants`, `verifyActionChains`, `conclusion`) and is tested there, which is why the
+console agrees with this client rather than merely resembling it. What the tests here cover is
+the layer above that, where a correct value can still reach a human as a false sentence:
+
+- `Tasks` — the four projection verdicts are four distinguishable words, and only `agrees`
+  renders as "checked". `local` must never read as a verification that happened.
+- `Agents` — an empty list says "nobody has said", and a stale beat says "last seen" rather
+  than "offline". Both prevent the same expensive mistake: starting a second replica of an
+  agent that is midway through a deploy.
+- `Grants` — a revoked grant is listed with its reason rather than filtered out, `max_uses` is
+  labelled "not enforced", and an unscoped grant says "applies anywhere" instead of rendering
+  a blank cell.
+- `ThreadView` — Stop exists only while something is running and says on screen that an
+  interrupt has no receipt; the status select publishes a kind 8109 and deliberately does not
+  move until one comes back.
+
+The suite is mutation-checked: breaking any one of those renders fails exactly one test.
+
+One trap worth knowing before adding to it. `assert.equal(queryByText(…), null)` is the obvious
+way to assert something is absent and it is a memory bomb on failure — `node:assert` builds its
+diff with `util.inspect`, which walks a jsdom element's document and window. A mutation check
+took 277 seconds and then reported only that a worker had been SIGKILLed. Use `absent()` from
+`test/fixtures.ts`, which compares a boolean.
 
 The loop these screens show is tested end to end in another language:
 `pnpm --filter @quorum/deploy-agent live` runs it over a socket against the Go relay, including

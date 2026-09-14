@@ -15,18 +15,25 @@
  */
 
 import assert from 'node:assert/strict'
-import { before, beforeEach, test } from 'node:test'
+import { beforeAll as before, beforeEach, test } from 'vitest'
 
 // Installed before the module under test is imported, because `identity.ts`
 // reaches for the global. A `Map` rather than a real store: these tests care
 // about which keys are written, and the cheapest way to see that is to look.
+//
+// `defineProperty` rather than assignment because jsdom's `localStorage` is a
+// getter on `Window` with no setter, so `globalThis.localStorage = …` throws
+// where it worked under bare Node.
 const store = new Map<string, string>()
-;(globalThis as { localStorage?: unknown }).localStorage = {
-  getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => void store.set(k, v),
-  removeItem: (k: string) => void store.delete(k),
-  clear: () => store.clear(),
-}
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+    clear: () => store.clear(),
+  },
+})
 
 type Identity = typeof import('../src/identity.ts')
 let identity: Identity

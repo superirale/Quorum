@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { describe, it } from 'vitest'
 import { Kinds, build, refTo, type NostrEvent } from '@quorum/protocol'
 import { LocalSigner } from '@quorum/sdk'
 import { proposedInput } from '../src/proposal.ts'
