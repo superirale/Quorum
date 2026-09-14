@@ -428,14 +428,34 @@ function committed(kind: number): boolean {
   return !isReplaceable(kind) && !isEphemeral(kind) && !isAddressable(kind)
 }
 
+/**
+ * relay29's rule, including the exception that is easy to miss.
+ *
+ * `RequireKindAndSingleGroupIDOrSpecificEventReference` asks "normal events or
+ * metadata events?" before it asks anything about scope: a filter naming only
+ * NIP-29 metadata kinds is answered from the relay's own group state, so a `d`
+ * is all the scope it needs and no `h` is possible — the relay never puts one on
+ * a 39002.
+ *
+ * Getting this wrong in the strict direction is as bad as getting it wrong in
+ * the permissive one, and less obvious. A fake relay that closed a filter the
+ * real one answers would make the SDK's member lookup untestable here and look
+ * like an SDK bug, so the fix would have gone into the wrong file.
+ */
 function isScoped(filter: Filter): boolean {
   if (filter.ids?.length) return true
   for (const letter of ['h', 'e', 'a'] as const) {
     const values = filter[`#${letter}`]
     if (Array.isArray(values) && values.length) return true
   }
-  return false
+  const kinds = filter.kinds ?? []
+  const metadataOnly = kinds.length > 0 && kinds.every((k) => NIP29_METADATA_KINDS.includes(k))
+  const identifiers = filter['#d']
+  return metadataOnly && Array.isArray(identifiers) && identifiers.length > 0
 }
+
+/** NIP-29's relay-generated kinds: metadata, admins, members, roles. */
+const NIP29_METADATA_KINDS: readonly number[] = [39000, 39001, 39002, 39003]
 
 function send(client: Client, message: unknown[]): void {
   if (client.socket.readyState !== 1) return

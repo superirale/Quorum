@@ -1,0 +1,35 @@
+{
+  "$id": "https://quorum.chat/schemas/body-8110-channel-key.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "epoch": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "key generation; increments on every rotation"
+    },
+    "key": {
+      "type": "string",
+      "minLength": 132,
+      "description": "base64 NIP-44 payload; plaintext is 64 hex characters"
+    },
+    "supersedes": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "description": "key generation; increments on every rotation"
+    },
+    "recipient": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "lowercase hex secp256k1 x-only public key"
+    }
+  },
+  "required": [
+    "epoch",
+    "key",
+    "recipient"
+  ],
+  "title": "ChannelKey body (kind 8110)"
+}

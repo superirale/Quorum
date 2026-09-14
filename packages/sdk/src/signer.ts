@@ -4,23 +4,30 @@
  * An agent's identity *is* its keypair, so this is the file where a mistake is
  * unrecoverable: there is no server that can rotate a bot token, and every
  * approval the agent ever verified was verified against a pubkey someone now
- * has the key for. The abstraction is therefore two methods wide, so that the
+ * has the key for. The abstraction is therefore four methods wide, so that the
  * key can live somewhere this process cannot read it.
  *
  *   LocalSigner   the key is in memory here. Fine for a server-side agent whose
  *                 process boundary is the security boundary.
  *   Nip07Signer   a browser extension holds the key; we send it events to sign.
- *   Nip46Signer   a remote bunker holds the key. NOT IMPLEMENTED — it is a
- *                 NIP-44-encrypted RPC, and NIP-44 lands in M9. Nothing else in
- *                 the SDK needs to change when it does, which is the point of
- *                 `Signer` being this small.
+ *   Nip46Signer   a remote bunker holds the key and this process never sees it.
+ *                 Deferred from M3 because it is a NIP-44-encrypted RPC and
+ *                 NIP-44 did not exist here until M9. See `nip46.ts`.
  *
  * `@quorum/protocol` deliberately stops at unsigned events for the same reason.
  */
 
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils.js'
-import { computeId, verifyEvent, type NostrEvent, type UnsignedEvent } from '@quorum/protocol'
+import {
+  computeId,
+  conversationKey,
+  nip44Decrypt,
+  nip44Encrypt,
+  verifyEvent,
+  type NostrEvent,
+  type UnsignedEvent,
+} from '@quorum/protocol'
 import { bech32 } from '@scure/base'
 
 /**
@@ -35,6 +42,24 @@ export interface Signer {
   pubkey(): Promise<string>
   /** Attach `id` and `sig`. Implementations MUST NOT alter the other fields. */
   sign(event: UnsignedEvent): Promise<NostrEvent>
+
+  /**
+   * Pairwise NIP-44, to and from `peer`.
+   *
+   * Part of the interface rather than an optional extra, because from M9 a key
+   * that cannot do this cannot join an encrypted channel — it can never unwrap
+   * the channel key handed to it. An optional method would push that from a
+   * type error to a runtime one, discovered by an agent that has already
+   * announced itself and started reading a thread it will never understand.
+   *
+   * Note what it is *not* for: a Quorum channel's own messages are sealed under
+   * a shared symmetric key, not pairwise, and that key lives in the SDK rather
+   * than behind the signer. These two methods exist for the two places NIP-44
+   * is genuinely pairwise — unwrapping a kind 8110 channel key, and NIP-46's
+   * own RPC.
+   */
+  nip44Encrypt(peer: string, plaintext: string): Promise<string>
+  nip44Decrypt(peer: string, payload: string): Promise<string>
 }
 
 /** 32 random bytes, as hex. Use a real key management story in production. */
@@ -123,6 +148,14 @@ export class LocalSigner implements Signer {
     return { ...event, id, sig: bytesToHex(schnorr.sign(id, this.#secret)) }
   }
 
+  async nip44Encrypt(peer: string, plaintext: string): Promise<string> {
+    return nip44Encrypt(plaintext, conversationKey(this.#secret, peer))
+  }
+
+  async nip44Decrypt(peer: string, payload: string): Promise<string> {
+    return nip44Decrypt(payload, conversationKey(this.#secret, peer))
+  }
+
   toJSON(): string {
     return `LocalSigner(${this.#pubkey})`
   }
@@ -141,6 +174,11 @@ export class LocalSigner implements Signer {
 export interface Nip07Provider {
   getPublicKey(): Promise<string>
   signEvent(event: UnsignedEvent): Promise<NostrEvent>
+  /** Optional in the wild; required by Quorum for encrypted channels. */
+  nip44?: {
+    encrypt(peer: string, plaintext: string): Promise<string>
+    decrypt(peer: string, payload: string): Promise<string>
+  }
 }
 
 /**
@@ -186,5 +224,30 @@ export class Nip07Signer implements Signer {
       throw new Error('NIP-07 provider returned an event with an invalid id or signature')
     }
     return signed
+  }
+
+  /**
+   * NIP-44 through the extension, which may not implement it.
+   *
+   * The error names the consequence rather than the missing method, because
+   * "window.nostr.nip44 is undefined" sends a human to the wrong place: nothing
+   * is wrong with Quorum, their extension is too old to read this channel.
+   */
+  async nip44Encrypt(peer: string, plaintext: string): Promise<string> {
+    return this.nip44().encrypt(peer, plaintext)
+  }
+
+  async nip44Decrypt(peer: string, payload: string): Promise<string> {
+    return this.nip44().decrypt(peer, payload)
+  }
+
+  private nip44(): NonNullable<Nip07Provider['nip44']> {
+    const api = this.provider.nip44
+    if (!api) {
+      throw new Error(
+        'this NIP-07 extension does not support NIP-44, so it cannot read an encrypted channel',
+      )
+    }
+    return api
   }
 }

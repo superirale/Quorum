@@ -82,6 +82,7 @@ whole human conversation with no modification.
 | 8107 | `handoff` | Transfers responsibility for a thread to another principal. |
 | 8108 | `checkpoint` | Relay-signed attestation of the events it holds. |
 | 8109 | `thread_op` | Requests a change to thread state. |
+| 8110 | `channel_key` | One member's copy of a channel's epoch key, wrapped to them. |
 
 ### Ephemeral (not stored, 20000–29999)
 
@@ -105,6 +106,7 @@ ephemeral kind cannot be delivered late by a relay honouring NIP-01.
 | 38104 | `agent_memory` | scoped key |
 | 38105 | `agent_cursor` | subscription id |
 | 38106 | `delegation` | delegate pubkey |
+| 38107 | `channel_policy` | group id |
 
 ### Data-vending machine (NIP-90)
 
@@ -450,6 +452,7 @@ resource. Nothing else can hold them:
 | --- | --- |
 | `group:join` | The relay admits the grantee to the group named in `scope.group`. |
 | `thread:budget` | The holder may publish a `set_budget` `thread_op`. |
+| `channel:encrypt` | The holder may publish a `channel_policy` for the group in `scope.group`. |
 
 `group:join` is the coarsest capability in the system — being in the workspace at
 all — and the one most easily left implicit. NIP-29 says a relay MAY admit a kind
@@ -465,7 +468,13 @@ the ordinary case for an agent somebody else will run. It can be revoked, and a
 third party can check who issued it without taking the relay's word. And it is
 subject to the same `expires_at` the rest of the system uses.
 
-`max_uses` cannot be enforced on either of these and MUST be ignored rather than
+`channel:encrypt` is what decides whether a channel is encrypted and under which
+epoch, so it is authority over confidentiality rather than over conversation.
+Owners and admins hold it implicitly; anyone else needs a grant scoped to that
+group. A relay MUST refuse a 38107 whose `d` names a group other than its `h`
+tag, or the grant is scoped to one channel and the policy lands on another.
+
+`max_uses` cannot be enforced on any of these and MUST be ignored rather than
 half-honoured: counting uses requires a caller to ask "how many times so far",
 and there is none — a relay counting for itself would be asserting a fact nobody
 can check. An invitation that should not stand forever bounds itself with
@@ -980,6 +989,141 @@ and per-principal rate limiting, and makes NIP-29 membership redundant with MLS
 group state. Addressing must move inside the ciphertext and loop-breaking becomes
 purely client-side. Implementations MUST NOT claim `mls` support without
 addressing this.
+
+### `nip44`: a shared channel key, in epochs
+
+NIP-44 is pairwise by construction — its conversation key is an ECDH between
+exactly two keys — so a channel of N members needs a group construction on top.
+Quorum uses **one random 32-byte channel key per epoch**, delivered to each
+member as a pairwise NIP-44 payload.
+
+The alternative, per-recipient fan-out, costs a copy of every message per member
+and leaves a late joiner unable to read anything said before they arrived. Its
+one advantage is that removing a member needs no re-key — which is not an
+advantage, because the removed member still holds the plaintext of everything
+sent while they were there.
+
+Neither shape has forward secrecy and neither may pretend to. That is what `mls`
+is for.
+
+**Only `content` is encrypted.** Every tag stays in the clear, including `h`,
+`p`, `e`, `E`, `counter`, `alt` and `enc` itself. An observer therefore keeps the
+social graph: who is in the channel, who answered whom, when, and how often.
+Implementations MUST state this rather than describe `nip44` channels as private.
+
+Two kinds make the mode possible and both stay unsealed:
+
+- **`channel_policy` (38107)**, addressable with `d` = the group id, published by
+  an owner or an admin. Body: `enc`, `epoch` (REQUIRED when `enc` is not
+  `plaintext`), optional `reason` and `changed_at`. It is the event that tells a
+  writer to encrypt, so it MUST be readable by somebody who cannot yet decrypt
+  anything. `reason` is in the clear on purpose: a rotation is usually a removal,
+  and "who lost access when" is the fact an audit needs and an encrypted channel
+  would otherwise destroy.
+- **`channel_key` (8110)**, one member's copy of the epoch secret. Body: `epoch`,
+  `key` (a NIP-44 payload from issuer to recipient whose plaintext is the 64-hex
+  channel key), `recipient`, and optional `supersedes`. The recipient is also
+  named by a `to`-marked `p` tag. A key wrapped under the channel key would be a
+  locked box containing its own key.
+
+`supersedes` is how a member notices they were skipped: holding epoch 2 and
+being handed epoch 4 marked `supersedes: 3` says a rotation happened that nobody
+wrapped for them, which on an encrypted channel is otherwise indistinguishable
+from silence.
+
+A reader MUST accept older epochs. History does not re-encrypt, and a message
+sent a second before a rotation is not invalid; the policy's `epoch` says which
+key to *write* with.
+
+### The nonce MUST be derived, not random
+
+```
+nonce = hmac_sha256(key = channel key, data = id of the event in the clear)
+```
+
+where "the event in the clear" means tags final and `content` still plaintext.
+
+NIP-44 specifies 32 random bytes. Quorum cannot use them, because exactly-once
+delivery here is not a lock or a ledger lookup — it is that a retried effect
+rebuilds a **byte-identical event** whose id the relay already holds and
+discards. A random nonce gives the retry a different ciphertext, a different id
+and a second message in the channel, so idempotency would silently become a
+property of unencrypted channels only. It is the same rule that makes a retry
+reuse its reserved `counter` and `created_at`.
+
+It MUST be a MAC and not a plain hash. A bare `sha256` of the plaintext event
+would be a public commitment to the plaintext published inside every payload, so
+a relay wanting to know whether an approver said `approved` could hash the guess
+and compare — a confirmation attack against every low-entropy message, which on
+a task-tracking protocol is most of them. Keying the derivation means only a
+member can build the nonce, and a member can already read the message.
+
+This is the synthetic-IV construction from deterministic AEAD, and it carries
+SIV's cost: identical plaintexts produce identical ciphertexts, so an observer
+sees repetition.
+
+### Which kinds stay in the clear
+
+The list is written as **exceptions**, so a kind added later is sealed by
+default. An allowlist of sealed kinds fails the other way, and its failure mode
+is a new event type quietly published in plaintext into channels that believe
+they are private.
+
+| Kinds | Why |
+| --- | --- |
+| 8110, 38107 | key management — the bootstrap must be readable by someone with no key |
+| 38102, 38106, 22242 | authorization — a capability nobody can audit is not a capability |
+| 8108, 38101, 7000 | relay-authored — the relay cannot encrypt to a key it does not hold |
+| 9000–9030, 39000–39999 | NIP-29 moderation and metadata, addressed to the relay |
+
+Everything else MUST be sealed on a channel whose policy says `nip44`. A relay
+MAY refuse an unsealed content-bearing event on such a channel, and MAY refuse an
+`enc=nip44` tag on a channel with no encryption policy — the second arm matters
+because `enc` being set is what skips body validation, so without it one tag is a
+bypass of the whole schema.
+
+`alt` is plaintext on a sealed event, so a sealed event MUST NOT describe its own
+body in one. Implementations write a generic line instead; an `alt` summarising
+the request would publish in the clear the sentence the body was hidden to
+protect.
+
+### Rotation publishes wraps first and the policy last
+
+To rotate, an owner or admin mints a new key, publishes one 8110 per remaining
+member, and publishes the 38107 naming the new epoch **last**. The policy is what
+tells every writer to start sealing under the new epoch; publish it first and
+every member encrypts to an epoch that has reached nobody. The other order costs
+a few hundred milliseconds during which the removed member can still read, which
+is the shorter outage and MUST be stated rather than designed around.
+
+**Rotation mints; it does not revoke.** A removed member keeps every byte they
+already hold, forever. Joining is the mirror: it hands over no history unless an
+admin wraps past epochs one 8110 at a time, and whether to do so is a decision
+for the admin rather than a default in a library.
+
+Setting a channel's policy is gated on the `channel:encrypt` resource, scoped
+`{group}`; owners and admins pass without a grant. See
+[the two resources the relay owns](#the-two-resources-the-relay-owns).
+
+### Auditing a sealed channel requires a key
+
+A verifier MUST check the signature against the **sealed bytes as published**,
+then open the body. The signature is over the ciphertext; a verifier that opens
+first is verifying an event that was never published.
+
+The consequence is unavoidable and MUST be reported rather than hidden. A reader
+with no key can still find an action chain, because the tags are in the clear,
+and can verify every signature in it — but it cannot read the `input_digest`,
+which lives in the sealed body and not in a tag, so it cannot tell whether an
+approval approved this input. It also cannot locate the chain's anchor, because a
+`proposed` event carries no `action` tag: its own id *is* the action id.
+
+So a keyless audit of a sealed chain reports that the chain is sealed, and that
+it found no proposal. It MUST NOT report a signature failure, and MUST NOT report
+a clean pass. On a `nip44` channel, "anyone can verify this consent offline"
+becomes "anyone holding an epoch key can", which is a real subtraction from the
+guarantee in [Approvals](#approvals) and belongs in any implementation's
+documentation.
 
 ## Loop prevention
 

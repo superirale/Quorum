@@ -52,6 +52,15 @@ export const TagName = {
   Counter: 'counter',
   /** Content encryption mode for this event. */
   Enc: 'enc',
+  /**
+   * Which channel-key generation sealed this event's content.
+   *
+   * Multi-character on purpose, like `counter`: relays index single-letter tags
+   * and nothing needs to filter on this one. A reader who holds epochs 1 and 2
+   * and meets an event tagged epoch 4 can then say *which* key it is missing,
+   * instead of reporting a MAC failure that looks identical to tampering.
+   */
+  Epoch: 'epoch',
   /** Id of the `proposed` event that opened an action chain. */
   Action: 'action',
   /** Quorum protocol version the author wrote against. */
@@ -129,6 +138,13 @@ export function enc(tags: readonly Tag[]): EncMode {
   return (ENC_MODES as string[]).includes(value ?? '') ? (value as EncMode) : EncMode.Plaintext
 }
 
+export function epoch(tags: readonly Tag[]): number | undefined {
+  const value = tagValue(tags, TagName.Epoch)
+  if (value === undefined) return undefined
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : undefined
+}
+
 export function counter(tags: readonly Tag[]): number | undefined {
   const raw = tagValue(tags, TagName.Counter)
   if (raw === undefined) return undefined
@@ -181,6 +197,10 @@ export function altTag(text: string): Tag {
 
 export function encTag(mode: EncMode): Tag {
   return [TagName.Enc, mode]
+}
+
+export function epochTag(n: number): Tag {
+  return [TagName.Epoch, String(n)]
 }
 
 export function counterTag(n: number): Tag {

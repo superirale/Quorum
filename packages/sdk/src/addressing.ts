@@ -23,6 +23,7 @@
  */
 
 import {
+  AddressableKinds,
   BorrowedKinds,
   EphemeralKinds,
   RegularKinds,
@@ -110,6 +111,44 @@ export function threadFilter(options: ScopeOptions & { threadId: string }): Filt
 /** The control plane for a channel: leases, interrupts, presence. */
 export function controlFilter(options: Omit<ScopeOptions, 'kinds'>): Filter {
   return channelFilter({ ...options, kinds: CONTROL_KINDS })
+}
+
+/**
+ * The two events that change what a reader can read: key wraps and the policy.
+ *
+ * Two filters and not one, because they are scoped differently — a wrap is
+ * addressed with `p` and the policy is addressable on `d` — and a single filter
+ * would AND the two tags and match neither.
+ *
+ * A plaintext channel subscribes to these too, and that is the point rather
+ * than an oversight. The transition a client must never miss is *plaintext →
+ * nip44*: an agent that kept writing in the clear after the channel was
+ * encrypted would be publishing readable messages into a channel where every
+ * other member believes the relay is holding ciphertext. Watching only when
+ * already encrypted would watch for everything except the case that matters.
+ *
+ * No `since`. A wrap for an older epoch is exactly as useful as a new one — it
+ * is how a joiner reads history — and the policy is addressable, so there is
+ * one of it per author and the relay serves the current one regardless.
+ */
+export function keyFilters(options: { group: string; pubkey: string }): Filter[] {
+  return [
+    {
+      kinds: [RegularKinds.ChannelKey],
+      [`#${TagName.Group}`]: [options.group],
+      [`#${TagName.Pubkey}`]: [options.pubkey],
+    },
+    {
+      kinds: [AddressableKinds.ChannelPolicy],
+      [`#${TagName.Group}`]: [options.group],
+      [`#${TagName.Identifier}`]: [options.group],
+    },
+  ]
+}
+
+/** True for the kinds {@link keyFilters} asks for. */
+export function isKeyManagement(kind: number): boolean {
+  return kind === RegularKinds.ChannelKey || kind === AddressableKinds.ChannelPolicy
 }
 
 function scoped(tags: Record<string, string[]>, options: ScopeOptions): Filter {

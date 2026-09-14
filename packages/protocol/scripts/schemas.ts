@@ -15,6 +15,7 @@ import { BODY_SCHEMAS } from '../src/bodies/index.ts'
 import { NostrEventSchema } from '../src/event.ts'
 import { QUORUM_KINDS, SUPPORTED_KINDS, kindName } from '../src/kinds.ts'
 import { INVOKE, Resource, SCOPE_GROUP } from '../src/resources.ts'
+import { UNSEALED_KINDS, UNSEALED_KIND_RANGES } from '../src/seal.ts'
 import { ADDRESS_MARKER, ENC_MODES } from '../src/tags.ts'
 import { REQUIREMENTS } from '../src/validate.ts'
 import { PROTOCOL_VERSION } from '../src/version.ts'
@@ -98,6 +99,7 @@ export function generate(): Record<string, unknown> {
       resources: {
         [Resource.Join]: 'admits the grantee to the workspace named in the scope',
         [Resource.ThreadBudget]: "sets a thread's spending ceiling",
+        [Resource.ChannelEncrypt]: "sets a channel's encryption policy and key epoch",
       },
     },
     envelope: {
@@ -105,6 +107,16 @@ export function generate(): Record<string, unknown> {
       alt_max_length: ALT_MAX_LENGTH,
       enc_modes: ENC_MODES,
       address_marker: ADDRESS_MARKER,
+      // On a channel whose policy says `nip44`, every kind except these must
+      // carry sealed content. Published as data and written as exceptions so
+      // that a kind added later is sealed by default in every implementation
+      // at once — the Go relay enforces this list and cannot read the Zod.
+      unsealed_kinds: UNSEALED_KINDS.map(String),
+      unsealed_kind_ranges: UNSEALED_KIND_RANGES.map((range) => ({
+        from: String(range.from),
+        to: String(range.to),
+        why: range.why,
+      })),
       content:
         'canonical JSON (RFC 8785) of the body schema, or plain text for kinds 9, 11 and 1111',
     },

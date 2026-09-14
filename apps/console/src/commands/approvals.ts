@@ -14,12 +14,12 @@ import { applyEdits, approvalResponse, inbox, type Pending } from '@quorum/sdk'
 import { bool, flag, flagAll, pairs, type ParsedArgs } from '../args.ts'
 import { bold, cyan, dim, green, red, short, when, yellow } from '../format.ts'
 import { findByPrefix } from '../inbox.ts'
-import { actionOf, groupEvents, open, proposalOf, type Session } from '../session.ts'
+import { actionOf, open, proposalOf, readableEvents, type Session } from '../session.ts'
 
 export async function inboxCommand(args: ParsedArgs): Promise<void> {
   const session = await open(flag(args, 'as'))
   try {
-    const items = inbox(await groupEvents(session), {
+    const items = inbox(await readableEvents(session), {
       me: session.me,
       now: Math.floor(Date.now() / 1000),
       all: bool(args, 'all'),
@@ -78,7 +78,7 @@ async function decide(args: ParsedArgs, decision: 'approved' | 'denied'): Promis
   const session = await open(flag(args, 'as'))
   try {
     const item = findByPrefix(
-      inbox(await groupEvents(session), {
+      inbox(await readableEvents(session), {
         me: session.me,
         now: Math.floor(Date.now() / 1000),
         all: true,

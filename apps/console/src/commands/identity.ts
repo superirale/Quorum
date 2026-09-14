@@ -2,7 +2,15 @@
 
 import { LocalSigner, generateSecretKey } from '@quorum/sdk'
 import { bool, flag, type ParsedArgs } from '../args.ts'
-import { listIdentities, loadConfig, loadKey, saveConfig, saveKey } from '../config.ts'
+import {
+  listBunkers,
+  listIdentities,
+  loadBunker,
+  loadConfig,
+  loadKey,
+  saveConfig,
+  saveKey,
+} from '../config.ts'
 import { bold, cyan, dim, green } from '../format.ts'
 
 export async function keygen(args: ParsedArgs): Promise<void> {
@@ -41,7 +49,10 @@ export async function keygen(args: ParsedArgs): Promise<void> {
 export async function use(args: ParsedArgs): Promise<void> {
   const name = args.words[1]
   if (!name) throw new Error('usage: quorum use <name>')
-  await loadKey(name) // fails loudly if it is not there
+  // Either backing will do. A bunker identity has no key file, and requiring
+  // one would make `use` the single command that could not select the safer
+  // kind of identity.
+  if (!(await loadBunker(name))) await loadKey(name) // fails loudly if it is not there
   const config = await loadConfig()
   await saveConfig({ ...config, identity: name })
   console.log(`${green('✓')} signing as ${bold(name)}`)
@@ -59,11 +70,19 @@ export async function whoami(args: ParsedArgs): Promise<void> {
     return
   }
 
-  for (const name of bool(args, 'all') ? await listIdentities() : [current]) {
-    const signer = LocalSigner.fromHex(await loadKey(name))
+  const names = bool(args, 'all')
+    ? [...new Set([...(await listBunkers()), ...(await listIdentities())])].sort()
+    : [current]
+
+  for (const name of names) {
     const mark = name === current ? green('*') : ' '
+    const saved = await loadBunker(name)
     // The hex is printed every time, next to the name, because the name is a
     // fiction of this console. Grants, approvals and the relay all speak keys.
-    console.log(`${mark} ${bold(name.padEnd(10))} ${signer.publicKey}`)
+    // How the key is held is printed too: "who am I" and "what could sign as
+    // me" are different questions, and only one of them is about a file here.
+    const pubkey = saved ? saved.pubkey : LocalSigner.fromHex(await loadKey(name)).publicKey
+    const held = saved ? dim('bunker') : dim('local key')
+    console.log(`${mark} ${bold(name.padEnd(10))} ${pubkey} ${held}`)
   }
 }

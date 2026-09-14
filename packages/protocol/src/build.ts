@@ -25,6 +25,7 @@ import {
   altTag,
   counterTag,
   encTag,
+  epochTag,
   groupTag,
   scopeTags,
   tagValue,
@@ -63,6 +64,8 @@ export interface BuildOptions {
   /** Per-author monotonic counter. Supply it; gap detection depends on it. */
   counter?: number
   enc?: EncMode
+  /** Channel-key generation, for sealed content. Required when `enc` is `nip44`. */
+  epoch?: number
   /** Override the generated `alt`. */
   alt?: string
   created_at?: number
@@ -141,7 +144,14 @@ export function build(options: BuildOptions): UnsignedEvent {
   if (d !== undefined) tags.push([TagName.Identifier, d])
   if (action !== undefined) tags.push([TagName.Action, action])
   if (counter !== undefined) tags.push(counterTag(counter))
-  if (enc !== EncMode.Plaintext) tags.push(encTag(enc))
+  if (enc !== EncMode.Plaintext) {
+    tags.push(encTag(enc))
+    // Written even though a decrypting reader could brute-force its keyring, so
+    // that "I cannot read this" and "I am missing epoch 4" are different
+    // sentences. On an encrypted channel the second one is actionable and the
+    // first is indistinguishable from a tampered event.
+    if (options.epoch !== undefined) tags.push(epochTag(options.epoch))
+  }
 
   if (isQuorumKind(kind)) {
     const altText =

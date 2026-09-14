@@ -31,6 +31,7 @@
  */
 
 import { EphemeralKinds, PresenceBody, type NostrEvent } from '@quorum/protocol'
+import type { Logger } from './client.ts'
 import type { Publisher } from './publish.ts'
 
 export type PresenceStatus = 'online' | 'busy' | 'offline'
@@ -110,6 +111,17 @@ export interface PresenceOptions {
   intervalSeconds?: number
   /** What to say when idle. */
   activity?: string
+  /**
+   * Where a failed beat goes. Defaults to `console`.
+   *
+   * Worth an option rather than a hardcoded `console.warn`, because the beat
+   * fails for a *routine* reason on an encrypted channel: an agent that has not
+   * been handed the current epoch key cannot seal its own heartbeat, so it
+   * cannot report that it is alive. That is real and worth saying — and saying
+   * it past a caller who explicitly asked for a silent agent turns every
+   * encrypted test and demo into a wall of warnings nobody reads.
+   */
+  log?: Logger
 }
 
 const DEFAULTS = { ttlSeconds: 90 }
@@ -130,12 +142,14 @@ export class PresenceReporter {
   private activity: string | undefined
   private timer: ReturnType<typeof setInterval> | undefined
   private failing = false
+  private readonly log: Logger
 
   constructor(publisher: Publisher, options: PresenceOptions = {}) {
     this.publisher = publisher
     this.ttlSeconds = options.ttlSeconds ?? DEFAULTS.ttlSeconds
     this.intervalSeconds = options.intervalSeconds ?? Math.max(1, Math.floor(this.ttlSeconds / 3))
     this.activity = options.activity
+    this.log = options.log ?? console
   }
 
   async start(): Promise<void> {
@@ -185,7 +199,7 @@ export class PresenceReporter {
       // readable across a long disconnection.
       if (!this.failing) {
         this.failing = true
-        console.warn(`[presence] heartbeat failed, will keep trying: ${String(error)}`)
+        this.log.warn(`[presence] heartbeat failed, will keep trying: ${String(error)}`)
       }
     }
   }

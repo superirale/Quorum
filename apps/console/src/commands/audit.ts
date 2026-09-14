@@ -13,7 +13,7 @@ import { writeFile } from 'node:fs/promises'
 import { conclusion, verifyActionChains, type ActionChain } from '@quorum/sdk'
 import { flag, type ParsedArgs } from '../args.ts'
 import { bold, dim, green, red, short, yellow } from '../format.ts'
-import { groupEvents, open } from '../session.ts'
+import { groupEvents, open, opener } from '../session.ts'
 
 export async function audit(args: ParsedArgs): Promise<void> {
   const session = await open(flag(args, 'as'))
@@ -24,7 +24,11 @@ export async function audit(args: ParsedArgs): Promise<void> {
       ? events.filter((e) => e.id.startsWith(thread) || e.tags.some((t) => t[1]?.startsWith(thread)))
       : events
 
-    const chains = verifyActionChains(scoped)
+    // Raw events in, an opener alongside. The signature check has to run
+    // against the bytes the author signed, and on an encrypted channel those
+    // bytes are the ciphertext — so the auditor opens after verifying rather
+    // than being handed events that were opened first.
+    const chains = verifyActionChains(scoped, { open: opener(session) })
     if (!chains.length) {
       console.log(dim(`no action chains in #${session.config.group} — nothing was proposed`))
       return
@@ -59,6 +63,18 @@ export async function exportEvents(args: ParsedArgs): Promise<void> {
       dim('  verify them with no relay and no keys:\n') +
         dim(`  pnpm --filter @quorum/deploy-agent verify ${path}`),
     )
+    if (session.channel.encrypted) {
+      // Said here rather than discovered there. The export is deliberately the
+      // sealed bytes — signatures are over those — so an offline verifier can
+      // check every signature in the file and read none of the bodies.
+      console.log(
+        yellow(`  #${session.config.group} is encrypted, so the bodies in this file are sealed.`),
+      )
+      console.log(
+        dim('  Signatures still verify offline; what was proposed and approved does not\n') +
+          dim('  without the channel key. That is what encrypting a channel costs.'),
+      )
+    }
   } finally {
     session.close()
   }

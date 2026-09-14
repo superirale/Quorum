@@ -25,8 +25,10 @@
     "test:python": "python3 scripts/validate.py fixtures/deploy-approval.json && python3 scripts/validate.py fixtures/deploy-approval.json --self-test"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
     "@noble/curves": "^1.9.1",
     "@noble/hashes": "^1.8.0",
+    "@scure/base": "^1.2.6",
     "zod": "^4.0.0"
   },
   "devDependencies": {

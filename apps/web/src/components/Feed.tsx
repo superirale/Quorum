@@ -15,21 +15,43 @@
 import type { NostrEvent } from '@quorum/protocol'
 import { describe, hue, short, when } from '../format.ts'
 
-export function Feed({ events, me }: { events: NostrEvent[]; me: string }) {
+export function Feed({
+  events,
+  me,
+  sealed,
+}: {
+  events: NostrEvent[]
+  me: string
+  /** True for an event sealed under an epoch this key does not hold. */
+  sealed?: (event: NostrEvent) => boolean
+}) {
   if (!events.length) return <p className="dim empty">nothing here yet</p>
 
   return (
     <ol className="feed">
-      {events.map((event) => (
-        <li key={event.id} className={event.pubkey === me ? 'mine' : undefined}>
-          <span className="kind">{event.kind}</span>
-          <span className="who" style={{ color: `hsl(${hue(event.pubkey)} 60% 70%)` }}>
-            {short(event.pubkey)}
-          </span>
-          <span className="text">{describe(event)}</span>
-          <span className="at dim">{when(event.created_at)}</span>
-        </li>
-      ))}
+      {events.map((event) => {
+        // Shown, not skipped. "There is traffic here I cannot read" and "the
+        // channel is quiet" are different facts, and on an encrypted channel
+        // the first one is what being locked out of an epoch looks like.
+        //
+        // The line is still readable, because `alt` is never sealed — which is
+        // the strongest demonstration this app has of why the spec requires it
+        // on every kind: a reader with no key at all still gets a sentence.
+        const locked = sealed?.(event) ?? false
+        return (
+          <li key={event.id} className={event.pubkey === me ? 'mine' : undefined}>
+            <span className="kind">{event.kind}</span>
+            <span className="who" style={{ color: `hsl(${hue(event.pubkey)} 60% 70%)` }}>
+              {short(event.pubkey)}
+            </span>
+            <span className={locked ? 'text locked' : 'text'}>
+              {locked && <span title="sealed under a key you do not hold">🔒 </span>}
+              {describe(event)}
+            </span>
+            <span className="at dim">{when(event.created_at)}</span>
+          </li>
+        )
+      })}
     </ol>
   )
 }

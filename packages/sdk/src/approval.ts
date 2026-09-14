@@ -49,6 +49,7 @@ import {
   addressees,
   digest,
   digestEquals,
+  isSealed,
   refTo,
   tagValue,
   threadRef,
@@ -74,14 +75,34 @@ export interface ApprovalCheck {
 }
 
 /**
+ * How to read a sealed event: a plaintext copy, or nothing for "no key".
+ *
+ * {@link ChannelCrypto.opener} is the implementation; this is a type so that
+ * nothing below `approval.ts` has to know a channel exists. Whatever it
+ * returns is read for its *body* only — the signature has already been checked
+ * against the bytes as signed, which on an encrypted channel are the
+ * ciphertext, and are the only bytes a signature can mean anything about.
+ */
+export type OpenSealed = (event: NostrEvent) => NostrEvent | undefined
+
+/**
  * Is this response a valid answer to this request?
  *
  * Pure, and deliberately takes events rather than a relay: this is the same
  * function the offline auditor in `audit.ts` runs over a JSON dump, so the
  * check an agent performs before acting and the check an auditor performs
  * afterwards cannot drift apart.
+ *
+ * Pass `open` on an encrypted channel. Both events must arrive **sealed**: the
+ * signature check below is the first thing that happens and it is done against
+ * the bytes the author signed, so handing this a decrypted copy would verify an
+ * event nobody ever signed and fail — correctly, and confusingly.
  */
-export function verifyApprovalResponse(request: NostrEvent, response: NostrEvent): ApprovalCheck {
+export function verifyApprovalResponse(
+  request: NostrEvent,
+  response: NostrEvent,
+  open?: OpenSealed,
+): ApprovalCheck {
   if (response.kind !== Kinds.ApprovalResponse) {
     return no(`kind ${response.kind} is not an approval response`)
   }
@@ -106,10 +127,16 @@ export function verifyApprovalResponse(request: NostrEvent, response: NostrEvent
     return no(`${short(response.pubkey)} was not one of the approvers this request asked`)
   }
 
-  const asked = parseBody(ApprovalRequestBody, request)
-  if (!asked) return no('the request body is not a valid approval request')
-  const answer = parseBody(ApprovalResponseBody, response)
-  if (!answer) return no('the response body is not a valid approval response')
+  // Everything above reads tags, which are never sealed — that is what makes
+  // "who was asked" and "which request is this" checkable by a relay and by a
+  // reader with no key. Everything below reads a body, so this is the line the
+  // channel key is needed at, and the line it is honest about needing one.
+  const clearRequest = readable(request, open)
+  const asked = parseBody(ApprovalRequestBody, clearRequest ?? request)
+  if (!asked) return no(clearRequest ? 'the request body is not a valid approval request' : sealedNote('request'))
+  const clearResponse = readable(response, open)
+  const answer = parseBody(ApprovalResponseBody, clearResponse ?? response)
+  if (!answer) return no(clearResponse ? 'the response body is not a valid approval response' : sealedNote('response'))
 
   if (asked.input_digest && !digestEquals(answer.input_digest, asked.input_digest)) {
     return no('does not echo the input digest it was asked to approve')
@@ -172,8 +199,10 @@ export function tallyApprovals(
   request: NostrEvent,
   responses: readonly NostrEvent[],
   context: { input: unknown; inputDigest: string },
+  open?: OpenSealed,
 ): Tally {
-  const asked = parseBody(ApprovalRequestBody, request)
+  const clearRequest = readable(request, open)
+  const asked = parseBody(ApprovalRequestBody, clearRequest ?? request)
   const base = {
     counted: [] as NostrEvent[],
     rejected: [] as RejectedResponse[],
@@ -182,13 +211,17 @@ export function tallyApprovals(
     modified: false,
   }
   if (!asked) {
-    return { ...base, decision: 'conflicted', reason: 'the request body is not valid' }
+    return {
+      ...base,
+      decision: 'conflicted',
+      reason: clearRequest ? 'the request body is not valid' : sealedNote('request'),
+    }
   }
 
   const rejected: RejectedResponse[] = []
   const votes = new Map<string, NostrEvent>()
   for (const response of [...responses].sort(byCreatedAt)) {
-    const check = verifyApprovalResponse(request, response)
+    const check = verifyApprovalResponse(request, response, open)
     if (!check.ok) {
       rejected.push({ event: response, reason: check.reason ?? 'rejected' })
       continue
@@ -200,9 +233,11 @@ export function tallyApprovals(
     votes.set(response.pubkey, response)
   }
 
+  // Safe to assert: a vote is in this map only because `verifyApprovalResponse`
+  // parsed its body, which it did through the same `open`.
   const answers = [...votes.values()].map((event) => ({
     event,
-    body: parseBody(ApprovalResponseBody, event)!,
+    body: parseBody(ApprovalResponseBody, readable(event, open) ?? event)!,
   }))
 
   const denial = answers.find((a) => a.body.decision === 'denied')
@@ -387,6 +422,17 @@ export interface ActDeps {
   log: Logger
   /** Overridable so tests do not wait on a wall clock. */
   now?: () => number
+
+  /**
+   * How to read a sealed approval. Required on an encrypted channel.
+   *
+   * Without it the digest an approver signed is unreadable — it lives in the
+   * sealed body, not in a tag — so every response fails verification and the
+   * agent waits for an approval that already arrived. An action that can never
+   * be approved is the failure mode, and it looks exactly like a human who has
+   * not answered yet.
+   */
+  open?: OpenSealed
 
   /**
    * Is there budget left in this thread? Checked before anything is proposed.
@@ -722,7 +768,7 @@ async function awaitDecision(
   const collect = (event: NostrEvent) => seen.set(event.id, event)
 
   for (const event of await deps.client.query(filters)) collect(event)
-  let tally = tallyApprovals(request, [...seen.values()], context)
+  let tally = tallyApprovals(request, [...seen.values()], context, deps.open)
   if (tally.decision !== 'pending') return tally
 
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000))
@@ -742,7 +788,7 @@ async function awaitDecision(
       expiresAt === undefined
         ? undefined
         : setTimeout(
-            () => finish(() => resolve(tallyApprovals(request, [...seen.values()], context))),
+            () => finish(() => resolve(tallyApprovals(request, [...seen.values()], context, deps.open))),
             Math.max(0, (expiresAt - now()) * 1000),
           )
     timer?.unref?.()
@@ -750,7 +796,7 @@ async function awaitDecision(
     const subscription = deps.client.subscribe(filters, {
       onEvent: (event) => {
         collect(event)
-        tally = tallyApprovals(request, [...seen.values()], context)
+        tally = tallyApprovals(request, [...seen.values()], context, deps.open)
         if (tally.decision !== 'pending') finish(() => resolve(tally))
       },
       onClosed: (reason) => {
@@ -769,6 +815,30 @@ async function awaitDecision(
 
 function no(reason: string): ApprovalCheck {
   return { ok: false, reason }
+}
+
+/**
+ * The plaintext copy of an event, or nothing when it is sealed under a key
+ * this reader does not hold.
+ *
+ * Callers fall back to the event itself (`readable(e, open) ?? e`), which is
+ * deliberate and is not the same as ignoring the hook. `ChannelCrypto.opened()`
+ * keeps the `enc` tag, so an already-opened event still reads as sealed here;
+ * falling back means a caller that opened its events before calling still gets
+ * the right answer, while a genuinely unreadable one fails to parse and is
+ * reported as sealed rather than as malformed.
+ */
+function readable(event: NostrEvent, open?: OpenSealed): NostrEvent | undefined {
+  if (!isSealed(event)) return event
+  return open?.(event)
+}
+
+function sealedNote(what: 'request' | 'response'): string {
+  return (
+    `the ${what} is sealed under a channel key this reader does not hold, so what it ` +
+    'says cannot be checked. This is not evidence of tampering; it is what an encrypted ' +
+    'channel looks like from outside.'
+  )
 }
 
 function parseBody<T>(schema: { safeParse(v: unknown): { success: boolean; data?: T } }, event: NostrEvent): T | undefined {

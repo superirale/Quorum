@@ -44,7 +44,26 @@ type Envelope struct {
 	AltMaxLength  int      `json:"alt_max_length"`
 	EncModes      []string `json:"enc_modes"`
 	AddressMarker string   `json:"address_marker"`
+
+	// The seal table: which kinds may stay in the clear on an encrypted
+	// channel. Written as exceptions in packages/protocol/src/seal.ts and
+	// published here so this relay enforces the same list rather than a Go
+	// copy of it. Written the other way round — an allowlist of sealed kinds —
+	// a kind added in a later milestone would be published in plaintext into
+	// channels that believe they are private, and nothing would report it.
+	UnsealedKinds      []string    `json:"unsealed_kinds"`
+	UnsealedKindRanges []KindRange `json:"unsealed_kind_ranges"`
 }
+
+// KindRange is a contiguous span of kinds that stays in the clear, with the
+// reason carried alongside so a refusal can explain itself.
+type KindRange struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Why  string `json:"why"`
+}
+
+type kindSpan struct{ from, to int }
 
 // RelayEnforced names the handful of capabilities a relay has to check itself,
 // because they have no resource anywhere else to check them.
@@ -73,6 +92,8 @@ type Index struct {
 	supported map[int]bool
 	encModes  map[string]bool
 	bodies    map[int]*BodySchema
+	unsealed  map[int]bool
+	spans     []kindSpan
 }
 
 // Load reads schemas/index.json and every body schema it names.
@@ -123,6 +144,29 @@ func Load(dir string) (*Index, error) {
 		index.encModes[mode] = true
 	}
 
+	index.unsealed = make(map[int]bool, len(index.Envelope.UnsealedKinds))
+	for _, key := range index.Envelope.UnsealedKinds {
+		number, err := strconv.Atoi(key)
+		if err != nil {
+			return nil, fmt.Errorf("the protocol index has a non-numeric unsealed kind %q", key)
+		}
+		index.unsealed[number] = true
+	}
+	for _, span := range index.Envelope.UnsealedKindRanges {
+		from, errFrom := strconv.Atoi(span.From)
+		to, errTo := strconv.Atoi(span.To)
+		if errFrom != nil || errTo != nil || to < from {
+			return nil, fmt.Errorf("the protocol index has an unreadable unsealed kind range %q..%q", span.From, span.To)
+		}
+		index.spans = append(index.spans, kindSpan{from: from, to: to})
+	}
+	if len(index.unsealed) == 0 {
+		// An empty table would make MustSeal true for the channel policy and
+		// the key wraps themselves, so an encrypted channel could never be set
+		// up or read. Louder at startup than as a workspace nobody can open.
+		return nil, fmt.Errorf("the protocol index publishes no unsealed kinds; is %s stale?", dir)
+	}
+
 	if index.Envelope.AddressMarker == "" {
 		return nil, fmt.Errorf("the protocol index declares no address marker")
 	}
@@ -155,6 +199,23 @@ func (i *Index) SupportedKindNumbers() []int {
 }
 
 func (i *Index) ValidEncMode(mode string) bool { return i.encModes[mode] }
+
+// MustSeal reports whether a channel whose policy is nip44 or mls requires this
+// kind's content to be encrypted.
+//
+// Kinds with no content at all pass either way; that is the caller's check,
+// since it holds the event and this holds only the table.
+func (i *Index) MustSeal(kind int) bool {
+	if i.unsealed[kind] {
+		return false
+	}
+	for _, span := range i.spans {
+		if kind >= span.from && kind <= span.to {
+			return false
+		}
+	}
+	return true
+}
 
 // Body returns the JSON Schema for a kind's content, if it has one.
 func (i *Index) Body(kind int) (*BodySchema, bool) {

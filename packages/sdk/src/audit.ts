@@ -28,13 +28,14 @@ import {
   canTransition,
   digest,
   digestEquals,
+  isSealed,
   tagValue,
   verifyEvent,
   type ActionStatus,
   type Decision,
   type NostrEvent,
 } from '@quorum/protocol'
-import { tallyApprovals } from './approval.ts'
+import { tallyApprovals, type OpenSealed } from './approval.ts'
 
 export interface ChainIssue {
   code: string
@@ -64,6 +65,15 @@ export interface ActionChain {
   /** True when a human's edit replaced the proposed input. */
   modified: boolean
   approvals: ChainApproval[]
+  /**
+   * The chain's events in causal order.
+   *
+   * On an encrypted channel audited with an `open` (see {@link AuditOptions}),
+   * these carry **plaintext content under the sealed event's id**, so
+   * `verifyEvent` on one returns false. The signature check has already
+   * happened here, against the bytes that were actually signed; re-verifying
+   * these would be checking a different question and getting the wrong answer.
+   */
   events: NostrEvent[]
   issues: ChainIssue[]
 }
@@ -71,6 +81,23 @@ export interface ActionChain {
 export interface AuditOptions {
   /** For expiry checks. Defaults to now. */
   now?: number
+
+  /**
+   * How to read a sealed event, on a channel that has any.
+   *
+   * Returns `undefined` for an event this reader has no key for. Signatures
+   * are checked *before* this runs and against the sealed bytes, which is the
+   * only order that means anything: an auditor that verified a decrypted copy
+   * would be verifying an event nobody signed.
+   *
+   * Absent — or returning `undefined` — a sealed chain is reported as sealed
+   * rather than as broken, and that distinction is the whole reason this is a
+   * hook rather than a quiet `try`. **An encrypted channel cannot be audited
+   * without a channel key**; that is a property of encrypting a channel, not a
+   * bug. Someone holding only a transcript gets "I cannot read this" instead of
+   * a page of parse failures that look like tampering.
+   */
+  open?: OpenSealed
 }
 
 /** Every action chain present in these events, oldest proposal first. */
@@ -78,16 +105,23 @@ export function verifyActionChains(
   events: readonly NostrEvent[],
   options: AuditOptions = {},
 ): ActionChain[] {
+  // Memoized once here rather than per chain. Grouping has to read a body — a
+  // proposal carries no `action` tag, because its own id *is* the action id —
+  // so on an encrypted channel every event is opened to be sorted and then
+  // opened again to be read, and decryption is the expensive part of auditing a
+  // year of a workspace.
+  const scoped: AuditOptions = options.open ? { ...options, open: memoize(options.open) } : options
+
   const chains = new Map<string, NostrEvent[]>()
   for (const event of events) {
-    const id = chainIdOf(event)
+    const id = chainIdOf(event, scoped.open)
     if (!id) continue
     const list = chains.get(id) ?? []
     list.push(event)
     chains.set(id, list)
   }
   return [...chains.keys()]
-    .map((id) => verifyActionChain(id, chains.get(id)!, options))
+    .map((id) => verifyActionChain(id, chains.get(id)!, scoped))
     .sort((a, b) => proposalTime(a) - proposalTime(b))
 }
 
@@ -108,14 +142,43 @@ export function verifyActionChain(
   const warn = (code: string, message: string) =>
     issues.push({ code, message, severity: 'warning' })
 
-  const mine = causalOrder(events.filter((e) => chainIdOf(e) === actionId))
+  const sealed = causalOrder(events.filter((e) => chainIdOf(e, options.open) === actionId))
 
-  for (const event of mine) {
-    // The first thing, always. Everything below reads content that only means
-    // something if the author's key stands behind these exact bytes.
+  for (const event of sealed) {
+    // The first thing, always, and against the bytes as signed. Everything
+    // below reads content that only means something if the author's key stands
+    // behind these exact bytes — which is why opening happens after this line
+    // and never before it.
     if (!verifyEvent(event)) {
       error('bad_signature', `event ${short(event.id)} does not verify`)
     }
+  }
+
+  // Opened copies. Same ids, same tags, same signatures — only `content`
+  // differs. An event we cannot open is kept rather than dropped, so the shape
+  // of the chain is still visible; its body simply will not parse, which is
+  // what the error below is there to explain in advance.
+  const sealedById = new Map(sealed.map((event) => [event.id, event]))
+  /** Back to the bytes as signed. An opened copy keeps its id, so this is exact. */
+  const asSealed = (event: NostrEvent) => sealedById.get(event.id) ?? event
+
+  let unreadable = 0
+  const mine = sealed.map((event) => {
+    if (!isSealed(event)) return event
+    const clear = options.open?.(event)
+    if (!clear) {
+      unreadable += 1
+      return event
+    }
+    return clear
+  })
+  if (unreadable) {
+    error(
+      'sealed',
+      `${unreadable} event(s) in this chain are sealed under a key this auditor does not hold, ` +
+        'so nothing below could read what was proposed, approved or run. This is what auditing ' +
+        'an encrypted channel without its key looks like; it is not evidence of tampering.',
+    )
   }
 
   const actions = mine.filter((e) => e.kind === Kinds.Action)
@@ -250,10 +313,18 @@ export function verifyActionChain(
       }
     }
 
-    const tally = tallyApprovals(request, responses, {
-      input: proposal.input,
-      inputDigest: proposal.input_digest ?? '',
-    })
+    // Sealed originals go in, not the opened copies used everywhere else here.
+    // `tallyApprovals` verifies each response's signature, and a signature is
+    // over the bytes as published — an opened copy carries plaintext under the
+    // sealed event's id, so every response would be rejected as unsigned and an
+    // honest encrypted chain would read as an unapproved execution. It opens
+    // the bodies itself, through the same hook, after verifying.
+    const tally = tallyApprovals(
+      asSealed(request),
+      responses.map(asSealed),
+      { input: proposal.input, inputDigest: proposal.input_digest ?? '' },
+      options.open,
+    )
 
     const counted = new Set(tally.counted.map((e) => e.id))
     for (const response of responses.sort(byCreatedAt)) {
@@ -365,14 +436,32 @@ function finish(chain: ActionChain): ActionChain {
   return chain
 }
 
-/** Which chain does this event belong to? */
-function chainIdOf(event: NostrEvent): string | undefined {
+/**
+ * Which chain does this event belong to?
+ *
+ * Every event in a chain but one says so in an `action` tag, which is never
+ * sealed. The exception is the proposal, whose id *is* the action id and which
+ * therefore has to be recognised by its body — so on an encrypted channel a
+ * keyless reader cannot tell a proposal from any other 8101, and the chain it
+ * assembles is missing the event everything else hangs off. That is reported as
+ * `no_proposal` alongside `sealed`, which together say what is true: there is a
+ * chain here and this reader cannot see its anchor.
+ */
+function chainIdOf(event: NostrEvent, open?: OpenSealed): string | undefined {
   const tagged = tagValue(event.tags, TagName.Action)
   if (tagged) return tagged
-  if (event.kind === Kinds.Action && bodyOf(ActionBody, event)?.status === 'proposed') {
-    return event.id
+  if (event.kind !== Kinds.Action) return undefined
+  const clear = isSealed(event) ? open?.(event) : event
+  return clear && bodyOf(ActionBody, clear)?.status === 'proposed' ? event.id : undefined
+}
+
+/** One decryption per event per audit, however many times it is asked for. */
+function memoize(open: OpenSealed): OpenSealed {
+  const cache = new Map<string, NostrEvent | undefined>()
+  return (event) => {
+    if (!cache.has(event.id)) cache.set(event.id, open(event))
+    return cache.get(event.id)
   }
-  return undefined
 }
 
 function proposalTime(chain: ActionChain): number {

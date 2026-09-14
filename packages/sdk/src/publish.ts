@@ -8,10 +8,28 @@
  * and put the result on a wire.
  */
 
-import { build, isEphemeral, type BuildOptions, type NostrEvent } from '@quorum/protocol'
+import {
+  build,
+  isEphemeral,
+  type BuildOptions,
+  type EncMode,
+  type NostrEvent,
+  type UnsignedEvent,
+} from '@quorum/protocol'
 import type { RelayClient } from './client.ts'
 import type { Counters } from './counter.ts'
 import type { Signer } from './signer.ts'
+
+/**
+ * The encrypted-channel hook: what tags a kind needs, and how to seal it.
+ *
+ * An interface rather than a `ChannelCrypto` import, so `publish.ts` does not
+ * depend on `channel.ts` depending on it back. Implemented by `ChannelCrypto`.
+ */
+export interface ChannelSealer {
+  buildOptions(kind: number): { enc?: EncMode; epoch?: number }
+  seal(unsigned: UnsignedEvent): UnsignedEvent
+}
 
 /** What a caller supplies; identity, channel and counter come from the agent. */
 export type PublishOptions = Omit<BuildOptions, 'pubkey' | 'group' | 'counter'> & {
@@ -33,6 +51,15 @@ export interface PublisherDeps {
   pubkey: string
   group: string
   counters: Counters
+  /**
+   * Encryption, if this channel has any.
+   *
+   * Deliberately here rather than at every call site. An encrypted channel
+   * where *most* things are sealed is not an encrypted channel, and the way
+   * that happens is one code path that forgot to pass a flag — so the flag does
+   * not exist and the policy is consulted on every publish instead.
+   */
+  channel?: ChannelSealer
 }
 
 export class Publisher {
@@ -49,15 +76,27 @@ export class Publisher {
     return event
   }
 
-  /** Everything but the wire. Useful for tests, and for computing an id first. */
+  /**
+   * Everything but the wire. Useful for tests, and for computing an id first.
+   *
+   * Sealing sits between `build()` and `sign()`, and that is the only place it
+   * can go. Before `build()` there are no tags to derive a nonce from and no
+   * `alt` decision made; after `sign()` the id is already committed to the
+   * plaintext. An explicit `enc` on the call wins over the channel policy, so a
+   * caller can still publish an unsealed event on an encrypted channel — which
+   * the key-management kinds have to do.
+   */
   async sign(options: PublishOptions): Promise<NostrEvent> {
+    const policy = this.deps.channel?.buildOptions(options.kind) ?? {}
     const unsigned = build({
       ...options,
+      enc: options.enc ?? policy.enc,
+      epoch: options.epoch ?? policy.epoch,
       pubkey: this.deps.pubkey,
       group: options.group ?? this.deps.group,
       counter: await this.counterFor(options),
     })
-    return this.deps.signer.sign(unsigned)
+    return this.deps.signer.sign(this.deps.channel?.seal(unsigned) ?? unsigned)
   }
 
   /**

@@ -503,10 +503,11 @@ func TestTheRelayRefusesWhatItCannotRead(t *testing.T) {
 	admit(t, adaConn, ada, bot)
 
 	root := mustPublish(t, adaConn, ada, thread("Ship the payments hotfix"))
+	encryptChannel(t, adaConn, ada, 1)
 
 	encrypted := contextRequest(relay.pubkey, map[string]any{"thread": root.ID})
 	encrypted.Content = "AqDS3ZBcNotRealCiphertextButNotJSONEither=="
-	encrypted.Tags = append(encrypted.Tags, nostr.Tag{"enc", "nip44"})
+	encrypted.Tags = append(encrypted.Tags, nostr.Tag{"enc", "nip44"}, nostr.Tag{"epoch", "1"})
 	request := mustPublish(t, botConn, bot, encrypted)
 
 	reply := answer(t, botConn, relay, request)

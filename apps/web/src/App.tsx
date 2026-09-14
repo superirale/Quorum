@@ -1,15 +1,21 @@
 /**
- * The whole client, in two states: set up, or connected.
+ * The whole client, in three states: restoring, set up, or connected.
  *
- * There is no router and no server session. Everything this app knows is the
- * key in `localStorage` and the events the relay hands it, which is the same
- * position the console is in and the same position an auditor is in. A reload
- * is a full rebuild of every view from signed events.
+ * There is no router and no server session. Everything this app knows is a
+ * signer — a bunker connection or a dev key — and the events the relay hands
+ * it, which is the same position the console is in and the same position an
+ * auditor is in. A reload is a full rebuild of every view from signed events.
+ *
+ * "Restoring" exists because a bunker session is a network handshake, and
+ * possibly a human approving it. A page that rendered the setup form for the
+ * second it takes would invite you to connect a signer you are already
+ * connecting.
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Agents } from './components/Agents.tsx'
 import { Approvals } from './components/Approvals.tsx'
+import { AuthPrompt } from './components/AuthPrompt.tsx'
 import { Chains } from './components/Chains.tsx'
 import { Composer } from './components/Composer.tsx'
 import { Feed } from './components/Feed.tsx'
@@ -17,7 +23,7 @@ import { Grants } from './components/Grants.tsx'
 import { Setup } from './components/Setup.tsx'
 import { Tasks } from './components/Tasks.tsx'
 import { ThreadView } from './components/ThreadView.tsx'
-import { forget, load, type Identity } from './identity.ts'
+import { forget, loadLocal, resumeBunker, savedBunker, type Identity } from './identity.ts'
 import { loadSettings, type Settings } from './settings.ts'
 import { short } from './format.ts'
 import { useWorkspace } from './useWorkspace.ts'
@@ -26,15 +32,46 @@ import { useWorkspace } from './useWorkspace.ts'
 type View = 'channel' | 'thread' | 'actions' | 'grants'
 
 export function App() {
-  const [identity, setIdentity] = useState<Identity | undefined>(load)
+  const [identity, setIdentity] = useState<Identity | undefined>(loadLocal)
   const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [restoring, setRestoring] = useState(() => Boolean(savedBunker()))
+  const [authUrl, setAuthUrl] = useState<string | undefined>()
+  const [problem, setProblem] = useState<string | undefined>()
+
+  useEffect(() => {
+    if (!savedBunker()) return
+    let live = true
+    void resumeBunker((url) => live && setAuthUrl(url))
+      .then((next) => {
+        if (!live) return
+        setAuthUrl(undefined)
+        if (next) setIdentity(next)
+      })
+      .catch((error: Error) => live && setProblem(error.message))
+      .finally(() => live && setRestoring(false))
+    return () => {
+      live = false
+    }
+  }, [])
+
+  if (restoring) {
+    return (
+      <div className="setup">
+        <h1>Quorum</h1>
+        <p className="dim">reconnecting to your signer…</p>
+        {authUrl && <AuthPrompt url={authUrl} />}
+      </div>
+    )
+  }
 
   if (!identity || !settings.group) {
     return (
       <Setup
         identity={identity}
         settings={settings}
+        problem={problem}
         onReady={(next, where) => {
+          setProblem(undefined)
           setIdentity(next)
           setSettings(where)
         }}
@@ -47,6 +84,7 @@ export function App() {
       identity={identity}
       settings={settings}
       onForget={() => {
+        identity.close()
         forget()
         setIdentity(undefined)
       }}
@@ -104,7 +142,16 @@ function Connected({
         <div>
           <strong>#{settings.group}</strong>{' '}
           <span className={`status ${workspace.status}`}>{workspace.status}</span>
-          <span className="dim"> · {settings.relay}</span>
+          <span className="dim"> · {settings.relay}</span>{' '}
+          {/* Not decoration. Which mode the channel is in decides whether the
+              relay can read what you are about to type, and it is a property of
+              the channel rather than of this client — so it is read off the
+              policy the relay serves, never assumed. */}
+          <span className={workspace.policy.enc === 'nip44' ? 'sealed' : 'dim'}>
+            {workspace.policy.enc === 'nip44'
+              ? `sealed · epoch ${workspace.policy.epoch ?? '?'}`
+              : 'plaintext'}
+          </span>
         </div>
         <Agents agents={workspace.agents} now={workspace.now} />
         <div>
@@ -112,11 +159,27 @@ function Connected({
           <button className="link" onClick={copy} title="copy this pubkey">
             {copied ? 'copied' : short(identity.pubkey)}
           </button>{' '}
+          <span className={identity.backing === 'bunker' ? 'dim' : 'warn-text'}>
+            {identity.backing === 'bunker' ? 'bunker' : 'dev key'}
+          </span>{' '}
           <button className="link danger" onClick={onForget}>
-            forget key
+            sign out
           </button>
         </div>
       </header>
+
+      {workspace.unreadable > 0 && (
+        <div className="banner warn">
+          {workspace.unreadable} event(s) here are sealed under a key this identity does not
+          hold.
+          <div className="dim">
+            They are listed in the channel and cannot be read, and nothing derived from them —
+            approvals, tasks, capabilities — can appear. Ask an admin to wrap the current epoch
+            for {short(identity.pubkey)}. Rotating a key does not re-wrap history for you
+            automatically.
+          </div>
+        </div>
+      )}
 
       {workspace.problem && (
         <div className="banner error">
@@ -169,7 +232,7 @@ function Connected({
 
           {view === 'channel' && (
             <>
-              <Feed events={workspace.feed} me={identity.pubkey} />
+              <Feed events={workspace.feed} me={identity.pubkey} sealed={workspace.sealed} />
               <Composer workspace={workspace} />
             </>
           )}

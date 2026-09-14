@@ -222,6 +222,37 @@ func thread(title string) *nostr.Event {
 	}
 }
 
+// channelPolicy builds the kind 38107 that switches a channel's encryption on
+// or off. `d` is the group id, which is what makes it findable.
+func channelPolicy(mode string, epoch int) *nostr.Event {
+	body := map[string]any{"enc": mode}
+	if epoch > 0 {
+		body["epoch"] = epoch
+	}
+	content, _ := json.Marshal(body)
+	return &nostr.Event{
+		Kind:    38107,
+		Content: string(content),
+		Tags: nostr.Tags{
+			{"h", group},
+			{"d", group},
+			{"alt", "channel encryption policy"},
+		},
+	}
+}
+
+// encryptChannel turns a channel's encryption on.
+//
+// No wait afterwards, and that is a fact about khatru rather than optimism:
+// AddEvent runs every OnEventSaved hook *before* it returns, and the OK the
+// client is waiting on is sent after that. So by the time this returns, the
+// relay has already dropped its cached policy for the channel and the next
+// event is judged against the new one.
+func encryptChannel(t *testing.T, conn *nostr.Relay, who actor, epoch int) {
+	t.Helper()
+	mustPublish(t, conn, who, channelPolicy("nip44", epoch))
+}
+
 func action(root string, body map[string]any) *nostr.Event {
 	content, _ := json.Marshal(body)
 	return &nostr.Event{
@@ -368,15 +399,18 @@ func TestEncryptedBodiesSkipBodyValidationButNotTheEnvelope(t *testing.T) {
 
 	createGroup(t, conn, alice)
 	root := mustPublish(t, conn, alice, thread("deploy api v1.4.2"))
+	encryptChannel(t, conn, alice, 1)
 
 	encrypted := action(root.ID, nil)
 	encrypted.Content = "AqDS3ZBcNotRealCiphertextButNotJSONEither=="
-	encrypted.Tags = append(encrypted.Tags, nostr.Tag{"enc", "nip44"})
+	encrypted.Tags = append(encrypted.Tags, nostr.Tag{"enc", "nip44"}, nostr.Tag{"epoch", "1"})
 	mustPublish(t, conn, alice, encrypted)
 
 	unaddressedAndEncrypted := action(root.ID, nil)
 	unaddressedAndEncrypted.Content = "AqDS3ZBcStillCiphertext=="
-	unaddressedAndEncrypted.Tags = nostr.Tags{{"h", group}, {"alt", "an action"}, {"enc", "nip44"}}
+	unaddressedAndEncrypted.Tags = nostr.Tags{
+		{"h", group}, {"alt", "an action"}, {"enc", "nip44"}, {"epoch", "1"},
+	}
 	if msg := publish(t, conn, alice, unaddressedAndEncrypted); msg == "" {
 		t.Error("an encrypted event skipped the envelope check too")
 	}

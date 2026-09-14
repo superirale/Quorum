@@ -61,6 +61,17 @@ export const RegularKinds = {
   Checkpoint: 8108,
   /** A request to change thread task state. The relay folds these into ThreadState. */
   ThreadOp: 8109,
+  /**
+   * One member's copy of a channel key, wrapped to them with pairwise NIP-44.
+   *
+   * Regular rather than addressable, and that is a decision rather than a
+   * default. Addressable would mean re-wrapping an epoch for a member replaces
+   * the earlier wrap, and there is no case where that is what anyone wants: a
+   * wrap is the historical fact that this admin handed this member this epoch
+   * at this moment, and a member who has lost their copy needs a *second* one,
+   * not a substitute for the first.
+   */
+  ChannelKey: 8110,
 } as const
 
 /**
@@ -93,6 +104,16 @@ export const AddressableKinds = {
   AgentCursor: 38105,
   /** A human authorising an agent to act on their behalf. d = delegation id. */
   Delegation: 38106,
+  /**
+   * The channel's encryption policy and current key epoch. d = group id.
+   *
+   * This exists so that "should I encrypt?" has an answer a writer can look up
+   * rather than one their operator configured. A member who posts plaintext
+   * into a channel everyone else is encrypting leaks the thread and gets no
+   * error, so the policy has to be discoverable, and — because it is
+   * discoverable — the relay can enforce it without being able to read a word.
+   */
+  ChannelPolicy: 38107,
 } as const
 
 /**

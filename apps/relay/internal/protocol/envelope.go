@@ -21,6 +21,7 @@ const (
 	TagIdentifier = "d"
 	TagEnc        = "enc"
 	TagCounter    = "counter"
+	TagEpoch      = "epoch"
 	TagAction     = "action"
 )
 

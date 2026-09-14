@@ -48,6 +48,8 @@ import {
   channelFilter,
   controlFilter,
   isForMe,
+  isKeyManagement,
+  keyFilters,
   threadFilter,
 } from './addressing.ts'
 import {
@@ -56,6 +58,7 @@ import {
   type ActResult,
   type BudgetVerdict,
 } from './approval.ts'
+import { ChannelCrypto, openReadable } from './channel.ts'
 import { RelayClient, type Logger, type Subscription } from './client.ts'
 import { fetchContext, packContext, type FetchContextOptions } from './context.ts'
 import { Counters } from './counter.ts'
@@ -114,6 +117,17 @@ export interface AgentContext {
   readonly addressedToMe: boolean
   /** Every pubkey this event is addressed to — us included. */
   readonly addressees: string[]
+  /**
+   * The triggering event's content, decrypted if the channel is encrypted.
+   *
+   * Always read this rather than `event.content`. On a plaintext channel they
+   * are the same string; on a `nip44` channel `event.content` is base64
+   * ciphertext, and a handler that matched on it would silently stop matching
+   * the day someone turned encryption on.
+   */
+  readonly text: string
+  /** This channel's encryption policy and keyring. See `channel.ts`. */
+  readonly channel: ChannelCrypto
 
   /** Exactly-once effects. Every side effect goes through this. Read `once.ts`. */
   readonly once: Once
@@ -208,6 +222,9 @@ export class Agent {
   private cursor!: Cursor
   private counters!: Counters
   private publisher!: Publisher
+  private crypto!: ChannelCrypto
+  private reloadingKeys = false
+  private reloadKeysAgain = false
   private memoryCache: Memory | undefined
   private leases: LeaseManager | undefined
   private presence: PresenceReporter | undefined
@@ -230,6 +247,19 @@ export class Agent {
   /** This agent's pubkey. Empty until {@link start} has run. */
   get me(): string {
     return this.pubkey
+  }
+
+  /**
+   * What this agent can read on the channel, for anything that wants to say so.
+   *
+   * Read-only in practice: the agent watches for key wraps and policy changes
+   * itself, so nothing outside needs to call `load()`. It is exposed because
+   * "the agent is running and holds no key" is a state an operator has to be
+   * able to see — it looks exactly like a quiet channel from every other angle.
+   */
+  get channel(): ChannelCrypto {
+    if (!this.crypto) throw new Error('start() the agent before asking about its channel')
+    return this.crypto
   }
 
   /** Handle events addressed to this agent. The one you want. */
@@ -272,15 +302,29 @@ export class Agent {
     this.pubkey = await this.options.signer.pubkey()
     this.cursor = await Cursor.load(this.store, this.options.name ?? 'default')
     this.counters = await Counters.load(this.store, this.pubkey)
+    this.crypto = new ChannelCrypto({
+      client: this.client,
+      signer: this.options.signer,
+      pubkey: this.pubkey,
+      group: this.options.group,
+      log: this.log,
+    })
     this.publisher = new Publisher({
       client: this.client,
       signer: this.options.signer,
       pubkey: this.pubkey,
       group: this.options.group,
       counters: this.counters,
+      channel: this.crypto,
     })
 
     await this.client.connect()
+    // Before anything is published or read. An agent that started writing
+    // plaintext into an encrypted channel for the first two hundred
+    // milliseconds of its life would be a leak nobody could undo, and an agent
+    // that read the backfill before unwrapping its keys would log a page of
+    // MAC failures and then never revisit those events.
+    await this.crypto.load()
     await this.recoverCounter()
     await this.reportUnfinishedWork()
 
@@ -299,7 +343,15 @@ export class Agent {
     }
 
     if (this.options.presence !== false) {
-      this.presence = new PresenceReporter(this.publisher, this.options.presence ?? {})
+      // `log` last, so a caller who supplied one still wins. An agent given a
+      // logger must not narrate anything to the console behind its back — and
+      // on an encrypted channel this particular warning is routine rather than
+      // exceptional, because an agent holding no epoch key cannot seal its own
+      // heartbeat and so cannot report that it is alive.
+      this.presence = new PresenceReporter(this.publisher, {
+        log: this.log,
+        ...(this.options.presence ?? {}),
+      })
       await this.presence.start()
     }
 
@@ -402,7 +454,11 @@ export class Agent {
     const work = this.any.length
       ? channelFilter(base)
       : addressedFilter({ ...base, pubkey: this.pubkey })
-    return [work, controlFilter({ group: this.options.group })]
+    return [
+      work,
+      controlFilter({ group: this.options.group }),
+      ...keyFilters({ group: this.options.group, pubkey: this.pubkey }),
+    ]
   }
 
   private subscribe(): Promise<void> {
@@ -455,6 +511,15 @@ export class Agent {
     }
 
     this.cursor.observe(event)
+
+    // Key management is not work, and an 8110 is `to`-addressed to this agent
+    // — so without this line a wrap would wake the handler as if it were an
+    // instruction, and the agent would answer a key with a sentence.
+    if (isKeyManagement(event.kind)) {
+      if (event.pubkey === this.pubkey) void this.counters.observeOwn(numericTag(event, 'counter') ?? 0)
+      void this.rekey()
+      return
+    }
 
     if (event.pubkey === this.pubkey) {
       void this.counters.observeOwn(numericTag(event, 'counter') ?? 0)
@@ -541,6 +606,22 @@ export class Agent {
 
   private async run(handlers: readonly Handler[], event: NostrEvent): Promise<void> {
     if (!handlers.length) return
+
+    // An event sealed under an epoch we were never given is not an error and is
+    // not silence — it is a third thing, and the log line has to say which,
+    // because the two fixes are opposite. A missing key is an admin publishing
+    // one 8110; a dropped event is a relay problem. Skipping without a word
+    // would make an encrypted channel look empty to an agent that had simply
+    // not been let in, and the operator would go looking at the relay.
+    if (this.crypto.unreadable(event)) {
+      this.log.warn(
+        `[agent] ${event.id.slice(0, 8)} is sealed under epoch ${
+          numericTag(event, 'epoch') ?? '(none)'
+        } and this agent holds ${this.crypto.epochs.join(', ') || 'no keys'}; not dispatching it`,
+      )
+      return
+    }
+
     const ctx = this.context(event)
     for (const handler of handlers) {
       try {
@@ -584,6 +665,8 @@ export class Agent {
       threadId: thread?.id,
       addressedToMe: isForMe(event, this.pubkey),
       addressees: addresseesOf(event.tags),
+      text: this.crypto.open(event),
+      channel: this.crypto,
       once,
       client: this.client,
       publish,
@@ -613,6 +696,10 @@ export class Agent {
             thread,
             parent: refTo(event),
             log: agent.log,
+            // On a sealed channel the digest an approver signed is inside the
+            // ciphertext, so without this the loop waits forever on approvals
+            // it is holding.
+            open: agent.crypto.opener(),
             budget: () => agent.budgetFor(thread.id),
             interrupts: agent.interrupts,
             spend: (label, cost, note) => publish(label, spendOp(thread, cost, note)),
@@ -676,7 +763,12 @@ export class Agent {
           ...rest,
           thread: id,
           requester: agent.pubkey,
-          events: await agent.threadEvents(id),
+          // Opened before the pure function, never inside it. On an encrypted
+          // channel this SDK packer is the *only* packer — the relay's DVM
+          // stands down because it cannot read a word — so M6's byte-identical
+          // claim has nothing to compare against here, and keeping
+          // `packContext` pure is what makes it still worth stating.
+          events: agent.openAll(await agent.threadEvents(id)),
         })
       },
 
@@ -716,6 +808,75 @@ export class Agent {
       { kinds: [Kinds.ThreadState], [`#${TagName.Identifier}`]: [id], [`#${TagName.Group}`]: [group] },
       { kinds: [Kinds.AgentManifest], [`#${TagName.Group}`]: [group] },
     ])
+  }
+
+  /**
+   * Reload the channel's policy and keys, because one of them just changed.
+   *
+   * Without this a long-lived agent reads its policy once at start and never
+   * again, and the two failures that follow are the two this milestone exists
+   * to prevent. Miss a rotation and the agent keeps sealing under the epoch the
+   * departed member still holds — the rotation happened and bought nothing.
+   * Miss a channel being encrypted for the first time and the agent keeps
+   * writing in the clear into a channel where everyone else believes the relay
+   * holds ciphertext. Neither produces an error anywhere; both just quietly
+   * stop being private.
+   *
+   * Coalesced rather than queued, because a rotation is one wrap per member
+   * followed by a policy — so N+1 arrivals within a few hundred milliseconds,
+   * each of which would otherwise start its own pair of queries. The trailing
+   * re-run matters: the policy is published *last*, so the reload triggered by
+   * the first wrap would otherwise settle on a state that predates it.
+   */
+  private async rekey(): Promise<void> {
+    if (this.reloadingKeys) {
+      this.reloadKeysAgain = true
+      return
+    }
+    this.reloadingKeys = true
+    try {
+      do {
+        this.reloadKeysAgain = false
+        const before = this.keyState()
+        await this.crypto.load()
+        const after = this.keyState()
+        if (after !== before) {
+          this.log.warn(`[agent] channel encryption changed: ${before} → ${after}`)
+        }
+      } while (this.reloadKeysAgain && this.running)
+    } catch (error) {
+      // Not fatal. The agent keeps whatever it already held, which is the
+      // state it was working in a moment ago; throwing here would take an
+      // agent down because a query failed once.
+      this.log.warn(`[agent] could not reload the channel keys: ${String(error)}`)
+    } finally {
+      this.reloadingKeys = false
+    }
+  }
+
+  /** One line describing what this agent can read and write. Compared, not parsed. */
+  private keyState(): string {
+    const policy = this.crypto.policy
+    return `${policy.enc}, writing epoch ${policy.epoch ?? '(none)'}, holding ${
+      this.crypto.epochs.join('/') || 'nothing'
+    }`
+  }
+
+  /**
+   * {@link openReadable}, with the agent's wording for the hole it leaves.
+   *
+   * The warning names a count rather than an id, because the interesting fact
+   * is "this agent is missing a key" and not "this event was odd" — and it is
+   * the only sign anywhere that the prompt the model is about to answer from
+   * has gaps in it.
+   */
+  private openAll(events: readonly NostrEvent[]): NostrEvent[] {
+    return openReadable(this.crypto, events, (missing, held) =>
+      this.log.warn(
+        `[agent] packing a thread without ${missing} event(s) this agent has no key for; ` +
+          `it holds epoch(s) ${held.join(', ') || '(none)'}`,
+      ),
+    )
   }
 
   /**

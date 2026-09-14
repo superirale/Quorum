@@ -193,7 +193,7 @@ async function join(args: ParsedArgs): Promise<void> {
       const [list] = await session.client.query([
         { kinds: [39002], '#d': [session.config.group], limit: 1 },
       ])
-      if (list && pubkeys(list).includes(session.signer.publicKey)) {
+      if (list && pubkeys(list).includes(session.me)) {
         console.log(`${green('✓')} ${bold(session.name)} is now a member of #${session.config.group}`)
         return
       }

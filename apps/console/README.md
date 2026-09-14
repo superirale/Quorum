@@ -37,10 +37,11 @@ q help
 
 State lives in `./.quorum`, or wherever `$QUORUM_HOME` points.
 
-> **Keys are stored in plaintext, mode 0600.** This is a development tool and that is a real
-> compromise, called out rather than hidden. NIP-46 lands in M9 and removes secret keys from
-> this process entirely; until then, do not point `$QUORUM_HOME` at a key that controls
-> anything you care about.
+> **A key made by `keygen` is stored in plaintext, mode 0600.** This is a development tool and
+> that is a real compromise, called out rather than hidden. Since M9 there is a way out of it:
+> `quorum bunker connect` backs the same identity with a NIP-46 remote signer, and then no
+> secret of yours is on this disk at all. Do not point `$QUORUM_HOME` at a local key that
+> controls anything you care about.
 
 ## The whole loop, by hand
 
@@ -170,6 +171,7 @@ mid-flight.
 | | |
 | --- | --- |
 | `keygen <name>` · `use <name>` · `whoami [--all]` | identities on this machine |
+| `bunker connect <name> <bunker://…>` · `bunker status [name]` · `bunker forget <name>` | back an identity with a NIP-46 signer instead of a key file |
 | `workspace create\|add\|remove\|members\|use` | NIP-29 group membership, which is the relay's business |
 | `workspace invite <who> [--expires]` · `workspace join` | the same thing as a capability: sign an invitation, or present one |
 | `grant <who> <resource>` | `--scope k=v` (repeatable) · `--actions` · `--expires` · `--max-uses` |
@@ -183,9 +185,13 @@ mid-flight.
 | `tasks` | what is being worked on, with status and what it has cost against its ceiling |
 | `budget <id> [--tokens n\|--usd n\|--none]` | read a ceiling, set one, or clear it |
 | `stop <id> [--action <id>] [--reason r]` | kind 28101: abort what is running now. `--pause`, or `--steer "<text>"` |
+| `channel status` · `channel keys` | what mode this channel is in, and who can actually read it |
+| `channel encrypt` · `channel rotate` | mint an epoch and wrap it for every member. `--to <who>` (repeatable) · `--reason` |
+| `channel key <who> [--epoch n\|--all]` | hand a member an epoch that already exists |
+| `channel plaintext --confirm` | turn encryption off for everything said next |
 
-Those last three are one screen used in that order, at speed, by somebody who has just noticed a
-number going up. Two things about them are worth stating rather than discovering:
+`tasks`, `budget` and `stop` are one screen used in that order, at speed, by somebody who has
+just noticed a number going up. Two things about them are worth stating rather than discovering:
 
 `budget --tokens 0` is a freeze, not a no-op. At the ceiling counts as exhausted, so zero stops
 the thread on the next fold using a capability that already exists. *Clearing* a ceiling needs
@@ -199,6 +205,53 @@ caveat every time: **nothing stores an interrupt.** There is no OK from a relay 
 agent heard it. If nothing was running, nothing was stopped, and the console says so rather than
 letting an operator walk away from a deploy that is still going. A `--steer` is delivered to the
 agent as untrusted text and is never applied automatically.
+
+### `bunker` — an identity this console cannot steal
+
+Every other identity here is a secret key in a file. A bunker identity is a key that stays on a
+phone, a hardware signer or another machine; the console holds only a throwaway client key that
+lets it *ask* for signatures, and both kinds answer to the same name, so `--as ada` and
+`quorum use ada` do not change. Two things follow that no amount of care with file permissions
+buys: the console can be compromised without the identity being compromised — an attacker can
+ask Ada's bunker to sign, and Ada can watch them ask and say no — and a signature can be refused
+at the moment it is requested. The second is the one this project needs. Its whole argument is
+that a human approval is a signed event nobody can forge, and a tool that holds the human's key
+and signs whenever it likes has quietly made that untrue for the identity it matters most for.
+
+`bunker status` opens the connection rather than printing the saved file, because a bunker that
+is asleep looks exactly like one that is working right up until the first signature. It also
+checks that the bunker still answers as the same pubkey: every grant and membership this console
+issued names the old one, and a bunker that silently switched keys would leave an identity that
+is in no group and holds nothing. `forget` only undoes this side — the bunker still lists the
+client key it approved, and revoking it there is a separate act.
+
+### `channel` — encryption as an operator decision
+
+`channel status` first and `channel keys` second, and the second is the one that surprises
+people: group membership and the ability to read the channel are different lists. A member who
+holds no wrap for the current epoch is in the group, counted by `workspace members` and indexed
+by every filter, and cannot read a word — and being locked out looks exactly like being quiet.
+The wraps are public by design, so `channel keys` needs no key and anyone may run it.
+
+`encrypt` and `rotate` are one operation on the wire — a fresh key, an 8110 wrap per member, a
+38107 policy naming the new epoch — and **the wraps are published first and the policy last**.
+The policy is what tells every writer to start sealing, so the other order encrypts to an epoch
+nobody has yet. They are two commands because they differ in what the operator believes
+beforehand, and each refuses the other's case: `encrypt` will not touch an already-encrypted
+channel, and `rotate` will not silently *enable* encryption on a plaintext one.
+
+Both print the same caveat every time, because it is the thing people assume and it is false:
+**rotation mints, it does not revoke.** Anyone who held an earlier epoch reads everything
+written under it forever. A removal is therefore two steps — `workspace remove`, then `rotate`,
+optionally with `--to` naming the members who should get the new key if the relay has not caught
+up. Joining is the mirror: `channel key <who>` hands over the current epoch, `--all` hands over
+the channel's history, and nothing decides that for an admin.
+
+`channel plaintext` is the declassification and takes `--confirm`. It decrypts nothing — history
+stays sealed under the epochs that sealed it — and that is what makes it the dangerous one:
+after it, messages simply start arriving readable, and nothing breaks to tell anybody. All three
+of these publish a 38107, which the relay gates on a `channel:encrypt` grant scoped to the
+group; owners and admins pass without one.
 
 `--as <name>` signs as another saved identity for one command. `--relay` and `--group` override
 the saved defaults; both are folded into the environment on the way in, so there is one

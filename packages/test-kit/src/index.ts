@@ -6,5 +6,6 @@
  * whenever the test wants to know what happens next.
  */
 
+export * from './fake-bunker.ts'
 export * from './fake-relay.ts'
 export * from './wait.ts'

@@ -34,6 +34,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`examples/claude-agent`](examples/claude-agent) | A language model reading a workspace — 500 messages into a 20k budget, with the trust boundary visible |
 | [`examples/auditor`](examples/auditor) | Not an agent: a reader catching a relay that withholds an event, and proving it to a stranger |
 | [`examples/runaway-agent`](examples/runaway-agent) | An agent nobody is watching, stopped by a budget; one somebody is, stopped by a button |
+| [`examples/sealed-channel`](examples/sealed-channel) | A channel the relay cannot read, and an honest account of what that costs |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -162,8 +163,9 @@ pnpm --filter @quorum/claude-agent demo      # 500 messages into a 20k budget �
 pnpm --filter @quorum/auditor demo           # a relay caught withholding, and the proof written out
 pnpm --filter @quorum/auditor verify         # the proof, checked by a program that trusts nothing
 pnpm --filter @quorum/runaway-agent demo     # an agent runs out of money; a human presses Stop
+pnpm --filter @quorum/sealed-channel demo    # the channel goes dark, and four things stop working
 
-pnpm check                                   # 515 tests: protocol 132, test-kit 17, sdk 306, console 41, web 19
+pnpm check                                   # 586 tests: protocol 157, test-kit 17, sdk 344, console 41, web 27
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -193,6 +195,14 @@ would. It ends on the decision a human actually has to make: reopening an exhaus
 not the same act as raising its ceiling, so it takes two ops, and doing only the first changes
 nothing at all.
 
+The sealed-channel demo is the one that mostly takes things away. An encrypted channel keeps the
+whole approval loop and loses the ability for a stranger to audit it; the relay stops folding
+tasks, stops packing context and stops enforcing approvals; and a removed member can still read
+every word said before they left. Two of its five acts are about those subtractions, because a
+demo of encryption that only showed the encryption working would be advertising. Its most
+re-readable line is that the bodies are gone and the graph is not: `nip44` hides payloads, not who
+talked to whom.
+
 The auditor is the odd one out: no agent, no model, nothing being asked of a human. A relay
 signs a commitment, hides an event, gets caught, and is then proven to have done it — followed by
 the four controls that keep it from crying wolf, because a mechanism that accuses an honest relay
@@ -214,7 +224,15 @@ pnpm --filter @quorum/auditor live           # the relay's own checkpoints, reco
 
 cd apps/relay && QUORUM_EVENTS_BURST=400 QUORUM_FILTERS_BURST=400 make run
 pnpm --filter @quorum/runaway-agent live     # one fold in Go and TypeScript, and Stop over a socket
+
+cd apps/relay && QUORUM_EVENTS_BURST=400 QUORUM_FILTERS_BURST=400 \
+  QUORUM_CHECKPOINT_EVERY=5 QUORUM_CHECKPOINT_LAG=10 QUORUM_CLOCK_SKEW_SECONDS=10 make run
+pnpm --filter @quorum/sealed-channel live    # a plaintext group and an encrypted one, same relay
 ```
+
+The sealed-channel run is paired throughout: every act does the same thing in a plaintext group
+and in an encrypted one against one relay in one run, because a claim about what a relay stops
+doing is worth nothing without the same relay still doing it.
 
 The bursts, not the per-minute rates: khatru's limiter counts up to the burst and forgives the
 rate once a minute, so raising `QUORUM_EVENTS_PER_MINUTE` alone does nothing. A runaway agent

@@ -52,7 +52,7 @@ export async function grantCommand(args: ParsedArgs): Promise<void> {
     console.log(
       dim(
         '  the resource decides whether to honour this; it will only do so if it\n' +
-          `  trusts ${short(session.signer.publicKey)} as an issuer.`,
+          `  trusts ${short(session.me)} as an issuer.`,
       ),
     )
   } finally {

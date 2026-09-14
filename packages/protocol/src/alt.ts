@@ -101,6 +101,14 @@ export function defaultAlt(kind: number, body: unknown): string {
       return clamp(`Relay checkpoint: ${b.count} events through ${iso(b.to)}`)
     case Kinds.ThreadOp:
       return clamp(threadOpAlt(b))
+    case Kinds.ChannelKey:
+      return clamp(`Channel key epoch ${b.epoch} for ${short(b.recipient)}`)
+    case Kinds.ChannelPolicy:
+      return clamp(
+        b.enc === 'plaintext'
+          ? 'Channel is plaintext'
+          : `Channel encrypted with ${b.enc}, epoch ${b.epoch}${b.reason ? ` (${b.reason})` : ''}`,
+      )
     case Kinds.Interrupt:
       return clamp(`Interrupt (${b.mode})${b.reason ? `: ${b.reason}` : ''}`)
     case Kinds.Lease:

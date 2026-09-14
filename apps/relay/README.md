@@ -90,7 +90,9 @@ actor's role · deleted events stay deleted · `previous` tag checking.
 6. `ValidateQuorumEvent` — the envelope always; the body only when `enc` is
    `plaintext`, because on `nip44` and `mls` channels the content is ciphertext
    and a relay that insisted on parsing it would reject every event the moment a
-   workspace turned encryption on.
+   workspace turned encryption on. That skip is exactly why policy 13 checks the
+   other direction too: without it, `enc=nip44` on a plaintext channel is a
+   one-tag bypass of the whole schema.
 7. `RejectForeignActionTransitions` — only the pubkey that published an action's
    `proposed` may advance it.
 8. `RejectUnaskedApprovals` — an 8103 must answer an 8102, in the same group,
@@ -102,8 +104,12 @@ actor's role · deleted events stay deleted · `previous` tag checking.
 11. `RejectWorkOnPausedThread` — a kind 8101 whose status is `proposed` or
     `running` is refused in a thread the projection says is `paused`. See
     [Thread state](#thread-state) for what it must *not* refuse.
+12. `RequireGrantToSetChannelPolicy` — a kind 38107 needs `channel:encrypt`, or
+    a role. See [Encryption](#encryption).
+13. `RequirePolicyEncMode` — the channel's stated mode, enforced in both
+    directions.
 
-The last five are last because they are the only policies that read the
+The last seven are last because they are the only policies that read the
 database. An event that is malformed, out of range or from a stranger has
 already been refused without touching a disk.
 
@@ -115,8 +121,8 @@ forged it can simply publish the request too. The SDK's auditor makes no such
 allowance — it is handed the whole chain and is the party being asked to act on
 the answer.
 
-The two capability policies **fail closed**, and the asymmetry is not an
-inconsistency. Those two ask a different question. "I have not seen the request
+The three capability policies — join, budget, channel policy — **fail closed**,
+and the asymmetry is not an inconsistency. They ask a different question. "I have not seen the request
 this answers" is ordinary in a federated system; "I have not seen a grant
 admitting you" is the ordinary state of everyone who was never invited, and a
 relay that let an absent grant mean yes would be back to admitting anyone who
@@ -159,7 +165,8 @@ What the relay checks, in `internal/policy/capability.go`:
   9007/9000/9001 oldest-first. A demoted admin's outstanding invitations stop
   working, which is the property that makes demotion mean anything.
 
-`max_uses` is ignored on both relay-enforced resources rather than half-honoured:
+`max_uses` is ignored on all three relay-enforced resources rather than
+half-honoured:
 counting uses needs a caller to ask "how many so far", and there is none. Bound
 an invitation with `expires_at` instead.
 
@@ -353,6 +360,94 @@ generates the conformance fixture `fixtures/merkle-v1.json` that
 `internal/checkpoint` consumes. An odd node is **promoted, never duplicated**:
 Bitcoin's padding rule is CVE-2012-2459, under which `[a,b,c]` and `[a,b,c,c]`
 produce the same root.
+
+## Encryption
+
+A channel's mode lives in a kind 38107 `channel_policy`, addressable with
+`d` = the group id. The relay reads it — that event is deliberately unsealed —
+and enforces it in `internal/policy/encryption.go`.
+
+**This is the odd policy in the set, and worth reading slowly: the relay
+enforces a property it is definitionally excluded from verifying.** It cannot
+decrypt a byte of what it is protecting and cannot tell a NIP-44 payload from
+base64 noise. What it *can* see is the policy and the `enc` tag, because tags are
+never sealed, and that is enough for the check that matters: on a channel whose
+policy says `nip44`, a content-bearing event not tagged `enc=nip44` is plaintext,
+whatever else it is.
+
+Without that check the failure is silent in the worst way. The message goes
+through, the relay stores it in the clear, and every reader displays it normally
+because `openEvent` passes an untagged event straight through. Nobody sees an
+error; the channel is simply less private than its policy says.
+
+`RequirePolicyEncMode` therefore refuses, with the relay's own words in the OK:
+
+| On a channel whose policy says | It refuses |
+| --- | --- |
+| `nip44` | a content-bearing sealable kind tagged anything but `nip44` |
+| `nip44` | an **unsealed** kind (a grant, a policy, a key wrap) tagged `enc=nip44` |
+| `nip44` | a sealed event with no `epoch` tag, or a non-positive one |
+| `plaintext` (or none) | anything tagged `enc=nip44` at all |
+
+Two of those need their own justification. The `plaintext` arm exists because
+`ValidateQuorumEvent` skips body validation whenever `enc` is set, so without it
+one tag bypasses the entire schema on a channel nobody is even encrypting — and
+the content would not have to be ciphertext. The unsealed-kind arm exists because
+that list is not a convenience: a capability grant nobody can audit is not a
+capability, and a channel policy nobody can read is a channel nobody can join.
+The list itself comes from `unsealed_kinds` and `unsealed_kind_ranges` in
+`schemas/index.json`, not from a second copy in Go.
+
+**The `epoch` tag is required and never compared to the current epoch.** A reader
+that cannot decrypt has to be able to say *which* key it is missing, because "no
+key for epoch 3" and "this event was tampered with" are otherwise the same MAC
+failure and they send an operator to opposite ends of the building. Requiring a
+*match* would be the wrong rule: an event written a second before a rotation, or
+arriving from another relay, is honest and readable by everyone holding the old
+key.
+
+`RequireGrantToSetChannelPolicy` gates the 38107 on the `channel:encrypt`
+resource, scoped `{group}`; owners and admins pass without a grant. The dangerous
+edit is setting `plaintext` on a channel that was encrypted — every message after
+it arrives readable, no ciphertext fails, no MAC complains, and the only sign is
+that the relay stopped refusing plaintext. A member who can do that declassifies
+a channel without ever reading a word of it. It also refuses a 38107 whose `d` is
+not its `h`: readers query the policy by `d`, so such an event would pass every
+check, exist, and govern nothing.
+
+The cached policy is invalidated on `OnEventSaved`, after the store accepts the
+38107 rather than when the write is attempted, and the cache trusts whatever is
+in the store. Re-checking the author's role on every read would answer a question
+already answered at write time, and the two would disagree the moment an admin
+was demoted — leaving a channel that quietly decrypts itself when the person who
+encrypted it loses their role.
+
+**What the relay stops doing on such a channel**, all for the same reason —
+each of them reads a body:
+
+- the 8109→38101 projection. No thread state is ever signed; clients fold
+  locally with the same logic and `threads()` reports `local`.
+- the context-packing DVM, which answers with a kind 7000 saying *"this channel
+  is encrypted; ask a packer that holds the keys"*. Silence would look like a
+  relay that is merely slow.
+- `RejectUnaskedApprovals` and `RejectForeignActionTransitions`, which need an
+  `input_digest` and a status.
+- budget enforcement, which needs a number. `add_spend` still works, because
+  spend is *stated* by the party that spent it rather than read out of a message.
+
+**What it keeps doing:** routing, rate limiting, NIP-29 membership, and
+checkpoints. A checkpoint commits to event ids, and an id is a hash of bytes the
+relay never has to understand, so layer 3 of the ordering design is untouched by
+encryption. That is not luck — the Merkle tree was specified over ids rather than
+over content for exactly this.
+
+This is defence in depth and not a guarantee. The relay can only refuse what it
+is asked to store, and every Quorum event is valid on a generic relay that will
+happily take the plaintext. It closes the accident — a misconfigured client, an
+older build, a paste into the wrong window — and not the betrayal.
+
+`examples/sealed-channel live` runs all of this as pairs, a plaintext group and
+an encrypted one against one relay in one run.
 
 ## Notes for the SDK (M3)
 

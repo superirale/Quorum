@@ -101,7 +101,7 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 
 | | |
 | --- | --- |
-| `signer.ts` | `LocalSigner` (hex or `nsec`, from env), `Nip07Signer` (browser extension). The secret is a `#private` field and every stringification of it redacts. NIP-46 is M9. |
+| `signer.ts` | `LocalSigner` (hex or `nsec`, from env), `Nip07Signer` (browser extension). `Nip46Signer` talks to a remote bunker over NIP-46, so the user's key never reaches the process. The secret is a `#private` field and every stringification of it redacts. |
 | `client.ts` | One relay connection: publish with a real OK/reject result, subscribe, NIP-42 AUTH on demand, reconnect with re-subscription. |
 | `addressing.ts` | `isForMe`, and the four filters — channel, addressed, thread, control. `assertScopedFilter` refuses a filter that would be rejected or would leak. |
 | `agent.ts` | The loop: subscribe, queue, dispatch, replay, shut down without losing in-flight work. |
@@ -120,6 +120,7 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 | `context.ts` | `packContext()` — the `extractive-v1` compactor, deterministic to the byte; `fetchContext()` asks a DVM for the same thing; `renderContext()` turns a pack into a prompt and fences what is not ours. `ctx.context()` picks between the two and the caller cannot tell which answered. |
 | `checkpoints.ts` | The reader's half of ordering integrity. `verifyWindow()` recomputes a relay's signed root from the events it served; `withholdingProof()` turns "short" into an artifact a stranger can check with `verifyWithholdingProof()`, no relay and no network. `checkChain()` walks the windows. |
 | `interrupt.ts` | Stop. `interrupt()` builds the kind 28101 a human's client publishes; `Interrupts` arms an `AbortSignal` per running action and aborts it when one arrives. `InterruptedError` is how an effect that catches broadly tells "somebody stopped me" from "it broke". Ephemeral, so there is no receipt — see below. |
+| `channel.ts` | Encrypted channels. `ChannelCrypto` holds whichever epochs this key has been handed and seals or opens on the way past `Publisher`; `rotateChannelKey()` mints an epoch, wraps it for each member and publishes the policy **last**; `channelPolicy()` reads what a channel says it is. `opener()` is the one `OpenSealed` implementation every verifier takes. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 
 ## Design notes that cost something to learn
@@ -207,10 +208,39 @@ status. The three copies of the rule — here, in the Go relay, in the test-kit 
 duplication that drifts silently, so `examples/auditor live` checks it against the real relay
 rather than against another copy of the same list.
 
+**Verify against the sealed bytes, then open.** A signature is over the bytes as published, and
+on an encrypted channel those are the ciphertext — so a verifier that decrypts first is checking
+an event that was never published. This sounds pedantic and is not: the whole approval loop was
+broken on a `nip44` channel and the audit was broken twice over, all from the same mistake, and
+one rule fixes all three. It is expressed as a single hook, `OpenSealed`, with one implementation
+— `ChannelCrypto.opener()` — rather than as a rule three call sites are trusted to remember.
+
+**`open` is a required dependency of `tallyApprovals` and `ctx.act()`, not an option with a
+default.** The failure without it is not a worse answer, it is the opposite one: a keyless tally
+rejects every honest approval, so the agent waits forever on consent it is already holding, and
+an action that can never be approved is indistinguishable from a human who has not replied. The
+digest lives in the sealed body rather than in a tag, so there is nothing to check against
+without a key.
+
+**`opened()` keeps the `enc` tag**, so `isSealed` is still true on an opened event. That is
+deliberate — the event's identity is the sealed one, and an opened copy carrying plaintext
+`content` under the sealed event's id would look signed and would not be. Ask `unreadable()`
+whether this key can open something, not `isSealed`.
+
+**An agent that reads its channel policy only at startup defeats every rotation that happens
+while it runs.** `ChannelCrypto` re-reads on the events it sees, which is why the 38107 and the
+8110 wraps are unsealed: the key-management traffic has to be legible to a member who does not
+yet hold the current key.
+
+**Presence is sealed like everything else, so an agent holding no epoch key cannot report that
+it is alive.** `PresenceReporter` takes a `Logger` for that reason. It used to say so on
+`console.warn` regardless of the logger the agent was given, which made every encrypted test a
+wall of warnings — and on an encrypted channel the failure is routine rather than exceptional.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 306 tests
+pnpm --filter @quorum/sdk test        # 344 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

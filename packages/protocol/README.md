@@ -24,11 +24,14 @@ pnpm add @quorum/protocol
 | `src/validate.ts` | Three-layer validation, returns structured issues |
 | `src/build.ts` | Construct valid unsigned events |
 | `src/alt.ts` | Fallback-text rules and defaults |
-| `src/resources.ts` | The capability resource names, including the two the relay enforces |
+| `src/resources.ts` | The capability resource names, including the three the relay enforces |
 | `src/merkle.ts` | `sha256-merkle-sorted-v1`, the tree a checkpoint commits with |
 | `src/cost.ts` | Adding up what a task cost and deciding when it has cost enough |
+| `src/nip44.ts` | NIP-44 v2, implemented against the reference vectors |
+| `src/seal.ts` | Sealing an event: the derived nonce, and which kinds stay in the clear |
+| `src/bodies/encryption.ts` | The channel policy (38107) and the wrapped channel key (8110) |
 | `schemas/` | **Generated, committed.** JSON Schema for every body |
-| `fixtures/` | **Generated, committed.** A signed golden transcript |
+| `fixtures/` | **Generated, committed.** A signed golden transcript, the Merkle vectors, and `nip44-v2.json` |
 
 ## Usage
 

@@ -34,10 +34,11 @@ const (
 // nothing. That is the M4 finding, applied to the two capabilities the relay is
 // the enforcement point for.
 const (
-	ResourceJoin         = "group:join"
-	ResourceThreadBudget = "thread:budget"
-	ActionInvoke         = "invoke"
-	ScopeGroup           = "group"
+	ResourceJoin           = "group:join"
+	ResourceThreadBudget   = "thread:budget"
+	ResourceChannelEncrypt = "channel:encrypt"
+	ActionInvoke           = "invoke"
+	ScopeGroup             = "group"
 )
 
 // ConfirmResourceNames fails if the published protocol and this package
@@ -61,7 +62,7 @@ func ConfirmResourceNames(published protocol.RelayEnforced) error {
 			"the protocol scopes relay-enforced capabilities on %q; this relay narrows on %q",
 			published.ScopeKey, ScopeGroup)
 	}
-	for _, resource := range []string{ResourceJoin, ResourceThreadBudget} {
+	for _, resource := range []string{ResourceJoin, ResourceThreadBudget, ResourceChannelEncrypt} {
 		if _, ok := published.Resources[resource]; !ok {
 			return fmt.Errorf(
 				"this relay enforces %q, which the protocol does not publish; it publishes %s",

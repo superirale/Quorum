@@ -18,12 +18,12 @@ import { checkBudget, describeBudget } from '@quorum/protocol'
 import { interrupt, threadOp, threads, type Thread } from '@quorum/sdk'
 import { flag, type ParsedArgs } from '../args.ts'
 import { bold, cyan, dim, green, red, short, yellow } from '../format.ts'
-import { groupEvents, open, resolvePubkey, type Session } from '../session.ts'
+import { open, readableEvents, resolvePubkey, type Session } from '../session.ts'
 
 export async function tasks(args: ParsedArgs): Promise<void> {
   const session = await open(flag(args, 'as'))
   try {
-    const found = threads(await groupEvents(session))
+    const found = threads(await readableEvents(session))
     if (!found.length) {
       console.log(dim('no threads in this group yet'))
       return
@@ -137,7 +137,7 @@ function colour(status: string): string {
 }
 
 async function find(session: Session, id: string): Promise<Thread> {
-  return findTask(threads(await groupEvents(session)), id)
+  return findTask(threads(await readableEvents(session)), id)
 }
 
 /**

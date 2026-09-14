@@ -20,6 +20,7 @@ import { ArtifactBody, CheckpointBody } from './artifact.ts'
 import { AgentCursorBody, AgentManifestBody, AgentMemoryBody, LeaseBody, PresenceBody } from './agent.ts'
 import { CapabilityGrantBody, DelegationBody } from './capability.ts'
 import { ContextPackRequestBody, ContextPackResultBody, SummaryBody } from './context.ts'
+import { ChannelKeyBody, ChannelPolicyBody } from './encryption.ts'
 import { HandoffBody, ThreadOpBody, ThreadStateBody } from './thread.ts'
 
 export * from './common.ts'
@@ -29,6 +30,7 @@ export * from './artifact.ts'
 export * from './agent.ts'
 export * from './capability.ts'
 export * from './context.ts'
+export * from './encryption.ts'
 export * from './thread.ts'
 
 export const BODY_SCHEMAS = {
@@ -41,6 +43,7 @@ export const BODY_SCHEMAS = {
   [RegularKinds.Handoff]: HandoffBody,
   [RegularKinds.Checkpoint]: CheckpointBody,
   [RegularKinds.ThreadOp]: ThreadOpBody,
+  [RegularKinds.ChannelKey]: ChannelKeyBody,
 
   [EphemeralKinds.Interrupt]: InterruptBody,
   [EphemeralKinds.Lease]: LeaseBody,
@@ -52,6 +55,7 @@ export const BODY_SCHEMAS = {
   [AddressableKinds.AgentMemory]: AgentMemoryBody,
   [AddressableKinds.AgentCursor]: AgentCursorBody,
   [AddressableKinds.Delegation]: DelegationBody,
+  [AddressableKinds.ChannelPolicy]: ChannelPolicyBody,
 
   [DvmKinds.ContextPackRequest]: ContextPackRequestBody,
   [DvmKinds.ContextPackResult]: ContextPackResultBody,

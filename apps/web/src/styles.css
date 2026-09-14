@@ -40,6 +40,23 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .warn { color: var(--warn); }
 .empty { padding: 12px 0; }
 
+/*
+ * `warn-text` rather than `warn`, because `.banner.warn` already owns a box and
+ * this is a word in a sentence. Used for the "dev key" badge in the header: the
+ * whole point of that badge is that it should not read as neutral chrome.
+ */
+.warn-text { color: var(--warn); }
+
+/* A sealed channel is a *good* state, so it gets the good colour, not a warning. */
+.sealed { color: var(--good); }
+
+/*
+ * An event this key cannot open. Dimmed and italic rather than hidden: "there
+ * is traffic here I cannot read" and "the channel is quiet" must not look the
+ * same. The line itself is still the `alt` text, which is never sealed.
+ */
+.locked { color: var(--dim); font-style: italic; }
+
 /* --- shell --- */
 
 .app { display: flex; flex-direction: column; height: 100vh; }

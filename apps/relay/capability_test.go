@@ -275,8 +275,9 @@ func TestTheRelayWillNotStartIfItAndTheProtocolDisagree(t *testing.T) {
 		Action:   policy.ActionInvoke,
 		ScopeKey: policy.ScopeGroup,
 		Resources: map[string]string{
-			policy.ResourceJoin:         "admits the grantee",
-			policy.ResourceThreadBudget: "sets a ceiling",
+			policy.ResourceJoin:           "admits the grantee",
+			policy.ResourceThreadBudget:   "sets a ceiling",
+			policy.ResourceChannelEncrypt: "sets a channel's encryption policy",
 		},
 	}
 	if err := policy.ConfirmResourceNames(published); err != nil {

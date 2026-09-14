@@ -524,3 +524,47 @@ func TestAltLeaksNothingFromTheBody(t *testing.T) {
 		t.Errorf("alt is %q; it must stay generic, and it must not repeat %q", alt, secret)
 	}
 }
+
+// A sealed op is not folded, and the content here is deliberately readable.
+//
+// Real ciphertext is base64, so the json.Unmarshal in Fold would fail on it
+// anyway and this test would pass with the `enc` check deleted — proving
+// nothing. The rule being pinned is not "the body did not parse", it is that on
+// an encrypted channel there is no relay projection at all: clients fold
+// locally, and a 38101 assembled from whichever ops the relay happened to be
+// able to read would be a partial answer with nothing about it saying so.
+func TestSealedOpsAreNotFolded(t *testing.T) {
+	h := setup(t)
+	h.op(t, Op{Op: "set_status", Status: "working"})
+
+	sealed := &nostr.Event{
+		Kind:      KindThreadOp,
+		CreatedAt: nostr.Now(),
+		Content:   `{"op":"set_status","status":"done"}`,
+		Tags: nostr.Tags{
+			{protocol.TagRootEvent, h.thread},
+			{protocol.TagRootKind, "11"},
+			{protocol.TagGroup, "payments"},
+			{protocol.TagAlt, "thread op"},
+			{protocol.TagEnc, "nip44"},
+			{protocol.TagEpoch, "1"},
+		},
+	}
+	if err := sealed.Sign(h.author); err != nil {
+		t.Fatal(err)
+	}
+	before := h.published.count()
+	h.projector.Fold(context.Background(), sealed)
+
+	if got := h.published.count(); got != before {
+		t.Errorf("folding a sealed op published %d events", got-before)
+	}
+	if got := h.state(t).Status; got != "working" {
+		t.Errorf("a sealed op moved the thread to %q", got)
+	}
+	for _, id := range h.state(t).FoldedFrom {
+		if id == sealed.ID {
+			t.Error("the projection claims to have folded an op the relay cannot read")
+		}
+	}
+}

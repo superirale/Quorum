@@ -35,6 +35,25 @@ export const Resource = {
    * is a thing to grant on purpose and not by default.
    */
   ThreadBudget: 'thread:budget',
+
+  /**
+   * Sets a channel's encryption policy. Scoped `{group: <id>}`.
+   *
+   * The relay is the enforcement point for the same structural reason as the
+   * other two: kind 38107 is the one event the relay must be able to read on an
+   * encrypted channel, because it is what tells the relay to start refusing
+   * plaintext. Nobody else is downstream of it — there is no "resource" that
+   * consults the policy before acting, only writers who obey it and a relay
+   * that enforces it.
+   *
+   * It is gated because the dangerous direction is *off*. Anyone who can
+   * publish a policy saying `plaintext` has turned a private channel public for
+   * every message written after it, with no ciphertext failing and no MAC
+   * complaining — the next message simply arrives readable. Turning it on is
+   * the harmless direction and is gated by the same grant only because one
+   * question with two answers is one capability.
+   */
+  ChannelEncrypt: 'channel:encrypt',
 } as const
 
 export type Resource = (typeof Resource)[keyof typeof Resource]

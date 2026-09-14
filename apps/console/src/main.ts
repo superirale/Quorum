@@ -21,6 +21,8 @@
 import { bool, flag, parseArgs, type ParsedArgs } from './args.ts'
 import { audit, exportEvents } from './commands/audit.ts'
 import { approve, deny, inboxCommand } from './commands/approvals.ts'
+import { bunker } from './commands/bunker.ts'
+import { channel } from './commands/channel.ts'
 import { grantCommand, grantsCommand, revokeCommand } from './commands/grants.ts'
 import { keygen, use, whoami } from './commands/identity.ts'
 import { say, watch } from './commands/messages.ts'
@@ -32,7 +34,9 @@ const COMMANDS: Record<string, (args: ParsedArgs) => Promise<void>> = {
   keygen,
   whoami,
   use,
+  bunker,
   workspace,
+  channel,
   grant: grantCommand,
   revoke: revokeCommand,
   grants: grantsCommand,
@@ -91,6 +95,9 @@ ${bold('identity')}
   keygen <name>              make a keypair and save it ${dim('(0600, plaintext — dev tool)')}
   use <name>                 sign as this identity from now on
   whoami [--all]             who am I, and what else is saved
+  bunker connect <name> <uri>  hold the key elsewhere ${dim('(NIP-46; nothing secret lands here)')}
+  bunker status [name]       is it reachable, and as whom
+  bunker forget <name>       stop using it from this console
 
 ${bold('workspace')}
   workspace create <group>   create it and become its admin
@@ -101,6 +108,17 @@ ${bold('workspace')}
   workspace remove <who>     put someone out ${dim('(revoke their invitation too)')}
   workspace members          who is in it
   workspace use <group>      work in this group from now on
+
+${bold('encryption')}
+  channel                    what mode this channel is in, and what I can read
+  channel keys               who holds which epoch ${dim('(and who is locked out)')}
+  channel encrypt            turn nip44 on: mint epoch 1 and wrap it for every member
+      --reason <r>           recorded in the clear, on purpose
+      --to <who>             wrap for these instead of the relay's member list
+  channel rotate             mint the next epoch ${dim('(same flags)')}
+  channel key <who>          hand a member an epoch they are missing
+      --epoch <n> | --all    default: the one being written now
+  channel plaintext --confirm  turn it off ${dim('(history stays sealed; new messages do not)')}
 
 ${bold('capabilities')}
   grant <who> <resource>     issue a capability

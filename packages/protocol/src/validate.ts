@@ -123,6 +123,10 @@ export const REQUIREMENTS: Readonly<Record<number, Requirements>> = Object.freez
   [RegularKinds.Handoff]: { threaded: true, addressed: true },
   [RegularKinds.ThreadOp]: { threaded: true },
   [RegularKinds.Checkpoint]: {},
+  // Channel-scoped, not thread-scoped: a key is handed to a member, not posted
+  // into a conversation. `addressed` is what makes the recipient findable with
+  // the same `#p` filter everything else uses.
+  [RegularKinds.ChannelKey]: { addressed: true },
   [EphemeralKinds.Interrupt]: { threaded: true },
   [EphemeralKinds.Lease]: { threaded: true },
   [EphemeralKinds.Presence]: {},

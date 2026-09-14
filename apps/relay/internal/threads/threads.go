@@ -123,6 +123,20 @@ func (p *Projector) Fold(ctx context.Context, event *nostr.Event) {
 		return
 	}
 
+	// The projector stands down on an encrypted channel, explicitly rather
+	// than by accident.
+	//
+	// It would in fact already stop: a sealed op's content is base64, so the
+	// Unmarshal below fails and Fold returns. But relying on that would leave
+	// the relay one lenient parser away from folding garbage into a state event
+	// it signs — and the reason to stop is not that the JSON is unreadable, it
+	// is that on a nip44 channel there is no 38101 at all and clients project
+	// locally instead. A reader that sees no projection concludes exactly that;
+	// a reader that sees a projection folded from half the ops does not.
+	if protocol.EncMode(event) != protocol.EncPlaintext {
+		return
+	}
+
 	thread := protocol.RootEvent(event)
 	group := protocol.Group(event)
 	if thread == "" || group == "" {

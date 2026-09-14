@@ -222,6 +222,12 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		return nil, nil, nil, err
 	}
 
+	// The one policy that enforces something this relay cannot itself read.
+	// It is stateful only because it caches each channel's kind 38107; see the
+	// package comment for why the cache is dropped on save rather than on
+	// arrival.
+	encryption := policy.NewEncryptionPolicies(index, db)
+
 	// These run after the ones khatru29.Init already installed, which is the
 	// order we want: relay29 has rejected non-members and unknown groups before
 	// anything here compiles a JSON Schema.
@@ -246,6 +252,8 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		policy.RequireGrantToJoin(db, authority),
 		policy.RequireGrantToSetBudget(db, authority),
 		policy.RejectWorkOnPausedThread(db, projector.PublicKey()),
+		encryption.RequireGrantToSetChannelPolicy(authority),
+		encryption.RequirePolicyEncMode(),
 	)
 
 	if cfg.EventsPerMinute > 0 {
@@ -262,7 +270,7 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 		relay.RejectFilter = append(relay.RejectFilter, policies.MustAuth)
 	}
 
-	relay.OnEventSaved = append(relay.OnEventSaved, projector.Fold, packer.Answer)
+	relay.OnEventSaved = append(relay.OnEventSaved, projector.Fold, packer.Answer, encryption.Forget)
 
 	// Ordering integrity, layer 3. Started here rather than in run() so the
 	// end-to-end tests exercise the same wiring the binary serves; the returned
