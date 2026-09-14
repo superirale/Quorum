@@ -37,7 +37,7 @@
  * other trade must be able to have it.
  */
 
-import type { NostrEvent } from '@quorum/protocol'
+import type { NostrEvent, UnsignedEvent } from '@quorum/protocol'
 import { TagName, tagValue } from '@quorum/protocol'
 import type { Store } from './store.ts'
 
@@ -250,13 +250,23 @@ export class SealedEnvelopes {
     this.store = store
   }
 
-  /** The sealed event previously stored for this plaintext id, if any. */
-  async get(plaintextId: string): Promise<NostrEvent | undefined> {
-    return this.store.get<NostrEvent>(`${SEALED}:${plaintextId}`)
+  /**
+   * The sealed event previously stored for this plaintext id, if any.
+   *
+   * Generic over the event shape, defaulting to a signed one, because there are
+   * two honest answers to "what gets cached". The `Publisher` seals between
+   * `build()` and `sign()`, so what it has to hand is an {@link UnsignedEvent};
+   * a caller sealing and signing in one step has a {@link NostrEvent}. Caching
+   * the unsigned form is enough for the property that matters — the relay
+   * dedupes on `id`, and the id commits to everything except the signature — so
+   * neither is wrong and the type should not pretend otherwise.
+   */
+  async get<T extends UnsignedEvent = NostrEvent>(plaintextId: string): Promise<T | undefined> {
+    return this.store.get<T>(`${SEALED}:${plaintextId}`)
   }
 
   /** Record a sealed event against the id of the event it was sealed from. */
-  async put(plaintextId: string, sealed: NostrEvent): Promise<void> {
+  async put(plaintextId: string, sealed: UnsignedEvent): Promise<void> {
     await this.store.set(`${SEALED}:${plaintextId}`, sealed)
   }
 
@@ -268,11 +278,11 @@ export class SealedEnvelopes {
    * the cache was written would leave the retry re-sealing, and the relay would
    * hold the same sentence twice under two ids.
    */
-  async sealOnce(
+  async sealOnce<T extends UnsignedEvent = NostrEvent>(
     plaintextId: string,
-    seal: () => NostrEvent | Promise<NostrEvent>,
-  ): Promise<NostrEvent> {
-    const stored = await this.get(plaintextId)
+    seal: () => T | Promise<T>,
+  ): Promise<T> {
+    const stored = await this.get<T>(plaintextId)
     if (stored) return stored
     const sealed = await seal()
     await this.put(plaintextId, sealed)

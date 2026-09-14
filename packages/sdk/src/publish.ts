@@ -28,7 +28,19 @@ import type { Signer } from './signer.ts'
  */
 export interface ChannelSealer {
   buildOptions(kind: number): { enc?: EncMode; epoch?: number }
-  seal(unsigned: UnsignedEvent): UnsignedEvent
+  /**
+   * Returns a promise because `mls` sealing cannot be synchronous.
+   *
+   * `nip44` sealing is a pure function of the event and a key, so `ChannelCrypto`
+   * returns the event directly. A ratchet step is asynchronous, must be persisted
+   * before the caller can publish, and has to consult the retry cache first — so
+   * the narrower signature would have forced `MlsCrypto` to seal off the side of
+   * the call and hand back a stale or half-written envelope. Widening the
+   * interface rather than adding a second hook keeps one answer to "is this
+   * channel encrypted, and how", which is the whole argument for the sealer
+   * living on the `Publisher` at all.
+   */
+  seal(unsigned: UnsignedEvent): UnsignedEvent | Promise<UnsignedEvent>
 }
 
 /** What a caller supplies; identity, channel and counter come from the agent. */
@@ -96,7 +108,14 @@ export class Publisher {
       group: options.group ?? this.deps.group,
       counter: await this.counterFor(options),
     })
-    return this.deps.signer.sign(this.deps.channel?.seal(unsigned) ?? unsigned)
+    // The parentheses are load-bearing. `await a?.b() ?? c` parses as
+    // `await (a?.b() ?? c)`, which awaits the *event* when there is no channel
+    // and is fine, but reads as though it might not be — and the version that
+    // is actually wrong, `(await a?.b()) ?? unsigned` vs `await (a?.b() ??
+    // unsigned)`, differ only when `seal()` resolves to `undefined`. Written out
+    // so the next reader does not have to work that out.
+    const sealed = (await this.deps.channel?.seal(unsigned)) ?? unsigned
+    return this.deps.signer.sign(sealed)
   }
 
   /**

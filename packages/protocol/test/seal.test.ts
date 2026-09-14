@@ -195,4 +195,15 @@ describe('mustSeal', () => {
     assert.ok(!mustSeal(9021)) // NIP-29 join request
     assert.ok(!mustSeal(BorrowedKinds.GroupMembers))
   })
+
+  test('leaves the `mls` bootstrap alone, or an agent cannot join the channel it is joining', () => {
+    // Named individually rather than looped over `UNSEALED_KINDS`, because the
+    // test above is vacuous for exactly the failure these three had: the spec
+    // listed them and the table did not, and a loop over the table agrees with
+    // whatever the table says. A sealed 30443 is a KeyPackage that only the
+    // group can read, published by somebody asking to be let into the group.
+    assert.ok(!mustSeal(30443)) // MLS KeyPackage
+    assert.ok(!mustSeal(1059)) // NIP-59 gift wrap carrying a Welcome
+    assert.ok(!mustSeal(10050)) // NIP-17 inbox relay list
+  })
 })

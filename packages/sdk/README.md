@@ -123,6 +123,7 @@ expensive. `examples/runaway-agent` is the whole of this, demonstrated.
 | `channel.ts` | Encrypted channels. `ChannelCrypto` holds whichever epochs this key has been handed and seals or opens on the way past `Publisher`; `rotateChannelKey()` mints an epoch, wraps it for each member and publishes the policy **last**; `channelPolicy()` reads what a channel says it is. `opener()` is the one `OpenSealed` implementation every verifier takes. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 | `archive.ts` | What forward secrecy forces a client to keep. `Archive` holds every event of a channel plus the plaintext this client read out of it, because on `mls` the relay's copy becomes unreadable and the relay is only the transport; `SealedEnvelopes` caches a sealed event before it is published, because a ratchet cannot produce byte-identical retries and `once()` rests on it. Both are plaintext on disk, deliberately — see below. |
+| `mls.ts` | The ratchet: `ts-mls` driven from behind the `mls` envelope, and the only file in the repo that imports an MLS library. `MlsCrypto` is a `ChannelSealer` like `ChannelCrypto` and shares nothing else with it — it holds one evolving state that opens each message *once*, rather than a map of epoch keys that opens anything any number of times. `mlsKeyPackage()` puts the Nostr pubkey in the credential; `create`/`add`/`join` are the ratchet half of membership, and the Nostr half is not built yet. |
 
 ## Design notes that cost something to learn
 
@@ -258,10 +259,54 @@ events and I can read seven". `opened()` drops the rest and reports how many —
 sealed would put base64 in front of a model as the conversation, which is the M9 keyless-packer
 failure in a new place.
 
+**Under `mls`, authorship travels in the MLS `authenticated_data`, not in the credential.** The
+spec's second binding says the MLS credential identity and the event `pubkey` are one author, and
+`ts-mls` will not tell us the credential — `processPrivateMessage` verifies the sender's signature
+and hands back `{ message, newState }` with no sender in it, because RFC 9420 encrypts the sender
+index on purpose. So an `mls` application message carries the sender's pubkey as its
+`authenticated_data`. It is not the weaker check: it is covered by the AEAD *and* by the sender's
+FramedContent signature, so altering it does not produce a message attributed to somebody else, it
+produces one that does not decrypt at all. It costs nothing on the wire, because the event's own
+`pubkey` field already publishes it. The credential check does not disappear — it moves to the
+moment a KeyPackage is added to the tree, which is where a credential is legible.
+
+**A binding failure must discard the ratchet step that detected it, and that one line is the
+difference between rejecting a forgery and handing Mallory the channel.** Mallory lifts Ada's
+MLSMessage off the wire and republishes it under her own signature; the ratchet opens it happily,
+because it *is* Ada's ciphertext, and the `authenticated_data` check then refuses it. Commit that
+step and the generation is spent, so Ada's honest event can never be opened by anyone — republish
+every message a moment before its author does and the channel goes permanently dark, one event at
+a time. `ts-mls` is functional, so throwing away `newState` really does leave the old state able
+to open the honest copy, and there is a test that does exactly that.
+
+**Persist the ratchet state before caching the envelope, never the other way round.** A crash in
+the gap between the two writes leaves a consumed generation with no cached envelope, the retry
+seals again, and the channel gets the same sentence twice under one `counter` — which is
+*detectable*, and the counter rule already says what it means. Envelope first would leave the
+persisted state a generation behind, so the agent's next message would reuse a generation every
+receiver has already spent and be silently dropped by all of them. A duplicate somebody can see
+beats a message nobody gets.
+
+**`MlsCrypto.opener()` reads the record and never the ratchet, and that narrowness is the
+design.** Every verifier in the SDK — `tallyApprovals`, `verifyActionChain`, the packer, three
+console commands — takes a synchronous `(event) => NostrEvent | undefined`. Making them all async
+would not fix anything and would make things worse: a verifier walking a forty-event chain would
+then be *decrypting* it, and decrypting one event twice throws. So the opener answers only from
+what `open()` recorded on arrival and what `warm()` loaded at start. The consequence is worth
+stating rather than discovering: on an `mls` channel, an event this client never saw arrive and
+never archived is not readable by it, ever. That is not a limitation of the function; it is what
+forward secrecy means, and it is equally true of the relay's copy.
+
+**Exporting the driver from the SDK root costs the browser nothing until something imports it.**
+`ts-mls` pulls in `@hpke/core`, and `index.ts` re-exports `mls.ts` unconditionally — but
+`pnpm --filter @quorum/web build` emits a byte-identical bundle with the export removed, because
+nothing in `apps/web` reaches it yet. Worth re-checking when the web surface does: this is the
+kind of property that stops being true quietly.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 361 tests
+pnpm --filter @quorum/sdk test        # 393 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

@@ -1192,6 +1192,17 @@ the tag is absent. The epoch is authenticated inside the `MLSMessage` header, so
 an absent tag costs a reader nothing it has not already recovered; it only costs
 the reader who *cannot* open the message the ability to say why.
 
+A Quorum `mls` group MUST use ciphersuite **1**,
+`MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519`, and a client MUST refuse to join a
+group that names another. One suite rather than a negotiated set, because MLS
+negotiates nothing at the message level: a group *has* a ciphersuite and every
+member implements it or cannot participate. Making it a workspace setting would
+move a compatibility failure from configuration time to join time, where it
+presents as a member who silently reads nothing. Suite 1 is RFC 9420's
+mandatory-to-implement suite, and its signature scheme is the one that resolves to
+WebCrypto in both Node and a browser, so a reference client needs no additional
+crypto dependency to read its own channel.
+
 A relay therefore sees every tag, plus the three fields an MLS `PrivateMessage`
 leaves public: the group id, the epoch, and whether the message is application
 data or a commit. The sender's leaf index is inside `encrypted_sender_data` and
@@ -1218,11 +1229,52 @@ six months is not an audit record.
 
 So on a Quorum `mls` channel the event is signed by the author's own key, as
 everywhere else, and **the Nostr signature is the authorship claim**. The MLS
-credential is a second, weaker statement about the same fact, and an
-implementation MUST check the two agree: the identity in the sender's MLS
-credential MUST equal the event's `pubkey`, and an event where they differ MUST
-be rejected. Without that check a member can re-publish another member's
-application message under their own signature.
+side is a second statement about the same fact, and an implementation MUST check
+the two agree. Without that check a member can re-publish another member's
+application message under their own signature — the ciphertext opens, because it
+really is the other member's, and the body is then attributed by signature to
+whoever republished it.
+
+The check is made in two places, because the credential and the message are
+legible at different moments:
+
+- **At join time, against the credential.** A KeyPackage published as a kind
+  30443 MUST carry a `basic` credential whose identity is the UTF-8 bytes of the
+  publishing pubkey's lowercase hex, and a member committing an Add MUST reject a
+  KeyPackage whose credential identity is not the `pubkey` that signed the 30443
+  carrying it. This is where the identity in the tree and the identity on the
+  relay are made one principal.
+- **Per message, against the `authenticated_data`.** An `mls` application message
+  MUST carry the sender's pubkey — 32 raw bytes, not hex — as the MLS
+  `authenticated_data` of its `PrivateMessage`, and a receiver MUST reject a
+  message whose `authenticated_data` is not the event's own `pubkey`.
+
+> An earlier draft of this section required the per-message check against the
+> credential itself. It is not achievable at a receiver. RFC 9420 encrypts the
+> sender index inside `encrypted_sender_data`, and an MLS library that follows the
+> RFC verifies the sender's signature and then returns the plaintext with no
+> sender in it — `ts-mls` does exactly this. A rule an implementation can only
+> satisfy by reaching into a library's internals for a value the library has
+> decided not to publish is not a rule; it is a suggestion that everyone
+> implements differently.
+
+The `authenticated_data` carries the same weight. It is covered by the AEAD *and*
+by the sender's `FramedContent` signature, so a third party cannot alter it:
+tampering does not produce a message attributed to somebody else, it produces one
+that does not decrypt. Admitting a message therefore still requires the same
+principal to control both the inner assertion and the Nostr key, which is what
+the credential binding was for. It leaks nothing — the event's own `pubkey` field
+publishes the author in the clear already — and, being outside the ciphertext's
+plaintext, it is checkable *before* a generation is spent.
+
+**A receiver that rejects a message on any of these bindings MUST discard the
+ratchet state the check produced, and MUST retain the state it had before.** This
+is the rule that keeps the binding from becoming a weapon. Detecting a republished
+message costs a decryption, and a decryption consumes the generation; commit it
+and Mallory silences the channel by republishing each message a moment before its
+author does, one permanently unopenable event at a time. Discarding is sound
+because an MLS state transition is a pure function of the state and the message:
+the retained state still opens the honest copy when it arrives.
 
 This gives up deniability, deliberately. Anyone who can open the message can
 prove to a third party who wrote it, which is the opposite of what a private
@@ -1267,6 +1319,17 @@ A sender MUST therefore persist the sealed envelope before publishing it and
 MUST republish the stored bytes on retry rather than re-sealing. With that, every
 guarantee in [Ordering](#ordering) holds unchanged.
 
+Two writes are involved — the advanced ratchet state and the sealed envelope —
+and **the state MUST be persisted first.** The order is not a preference. Persist
+the envelope first and a crash in the gap leaves the stored state one generation
+behind what was published, so the sender's *next* message reuses a generation
+every receiver has already spent; every receiver drops it, none of them reports
+anything, and the sender believes it spoke. Persist the state first and a crash
+in the gap leaves a consumed generation with no cached envelope, so the retry
+seals again and the channel gets the same body twice under one `counter` — which
+the rule below already covers. A duplicate somebody can see beats a message
+nobody gets.
+
 A crash between the ratchet step and that write is still possible, and it
 produces two events from one author bearing the same `counter`. A receiver MUST
 disambiguate by opening them: same counter and the same plaintext under the same
@@ -1309,6 +1372,16 @@ Three rules about that archive, each of which fixes a way of losing it quietly:
   signature is over the sealed bytes and it is the authorship claim, so an
   archive of plaintexts that relies on a relay still serving the envelopes is not
   a record of anything.
+
+The archive is also the only thing that makes a re-seen event readable, so **a
+receiver MUST consult it before the ratchet and MUST NOT process an application
+message it has already opened.** Decryption deletes the generation it used, so a
+second attempt at the same message does not return the same answer — it fails.
+The ordinary way this happens is not an error path but a reconnect: restart,
+backfill, meet the whole of last month again. Archive-first is therefore a
+requirement rather than a cache policy, and an implementation that treats it as
+an optimisation works in every test written by hand and breaks on the first real
+reconnection.
 
 Retention is the one place any of the forward secrecy can be recovered, and it is
 a workspace's decision rather than a library's: keeping forever preserves the
