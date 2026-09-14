@@ -19,7 +19,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "schemas": "node --experimental-strip-types scripts/gen-schemas.ts",
-    "fixtures": "node --experimental-strip-types scripts/gen-fixtures.ts",
+    "fixtures": "node --experimental-strip-types scripts/gen-fixtures.ts && node --experimental-strip-types scripts/gen-merkle-fixture.ts",
     "check-registry": "node --experimental-strip-types scripts/check-registry.ts",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:python": "python3 scripts/validate.py fixtures/deploy-approval.json && python3 scripts/validate.py fixtures/deploy-approval.json --self-test"

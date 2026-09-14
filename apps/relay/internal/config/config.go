@@ -45,6 +45,22 @@ type Config struct {
 
 	// ClockSkew bounds how far an event's created_at may sit from now.
 	ClockSkew time.Duration
+
+	// CheckpointEvery is how often the relay signs a checkpoint per group.
+	// Zero turns checkpointing off, which is a supported configuration — it is
+	// what every generic relay does — and costs readers layer 3.
+	CheckpointEvery time.Duration
+
+	// CheckpointLag is how far behind now a checkpoint window closes.
+	//
+	// It must be at least ClockSkew and Load refuses to start otherwise. The
+	// reason is the one property that makes a committed window final: the relay
+	// already rejects any event dated more than ClockSkew in the past, so a
+	// window closing at now-lag with lag >= skew can never receive a late
+	// arrival. Shorten it below the skew and an honest event lands inside a
+	// window the relay has already signed, which does not degrade the
+	// mechanism — it makes an honest relay indistinguishable from a caught one.
+	CheckpointLag time.Duration
 }
 
 func Load() (Config, error) {
@@ -61,6 +77,24 @@ func Load() (Config, error) {
 		FiltersPerMinute: intEnv("QUORUM_FILTERS_PER_MINUTE", 120),
 		MaxFiltersBurst:  intEnv("QUORUM_FILTERS_BURST", 40),
 		ClockSkew:        time.Duration(intEnv("QUORUM_CLOCK_SKEW_SECONDS", 900)) * time.Second,
+		CheckpointEvery:  time.Duration(intEnv("QUORUM_CHECKPOINT_EVERY", 300)) * time.Second,
+		CheckpointLag:    time.Duration(intEnv("QUORUM_CHECKPOINT_LAG", 900)) * time.Second,
+	}
+
+	// Refused at boot rather than clamped, for the same reason
+	// ConfirmResourceNames is fatal: a relay that quietly corrected this would
+	// go on publishing checkpoints that look exactly like the ones it should be
+	// publishing, and the first sign of trouble would be a client accusing it
+	// of withholding an event that arrived on time.
+	if c.CheckpointEvery > 0 && c.CheckpointLag < c.ClockSkew {
+		return c, fmt.Errorf(
+			"QUORUM_CHECKPOINT_LAG is %s but QUORUM_CLOCK_SKEW_SECONDS allows events %s old.\n"+
+				"A checkpoint window must close behind the oldest event the relay will still\n"+
+				"accept, or an honest late arrival lands inside a window already signed and the\n"+
+				"relay appears to have withheld it. Raise the lag to at least the skew, or lower\n"+
+				"the skew.",
+			c.CheckpointLag, c.ClockSkew,
+		)
 	}
 
 	owners, err := listEnv("QUORUM_OWNER_PUBKEYS")

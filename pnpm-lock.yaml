@@ -61,6 +61,25 @@ importers:
         specifier: ^7.1.0
         version: 7.3.6(@types/node@24.13.4)
 
+  examples/auditor:
+    dependencies:
+      '@quorum/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@quorum/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+    devDependencies:
+      '@quorum/test-kit':
+        specifier: workspace:*
+        version: link:../../packages/test-kit
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.4
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   examples/claude-agent:
     dependencies:
       '@anthropic-ai/sdk':
@@ -167,6 +186,12 @@ importers:
 
   packages/test-kit:
     dependencies:
+      '@noble/curves':
+        specifier: ^1.9.1
+        version: 1.9.7
+      '@noble/hashes':
+        specifier: ^1.8.0
+        version: 1.8.0
       '@quorum/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -174,12 +199,6 @@ importers:
         specifier: ^8.18.0
         version: 8.21.3
     devDependencies:
-      '@noble/curves':
-        specifier: ^1.9.1
-        version: 1.9.7
-      '@noble/hashes':
-        specifier: ^1.8.0
-        version: 1.8.0
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.4

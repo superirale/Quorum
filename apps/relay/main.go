@@ -30,6 +30,7 @@ import (
 	"github.com/fiatjaf/relay29/khatru29"
 	"github.com/nbd-wtf/go-nostr/nip29"
 
+	"github.com/quorum-chat/quorum/apps/relay/internal/checkpoint"
 	"github.com/quorum-chat/quorum/apps/relay/internal/config"
 	"github.com/quorum-chat/quorum/apps/relay/internal/contextpack"
 	"github.com/quorum-chat/quorum/apps/relay/internal/policy"
@@ -54,7 +55,7 @@ var nip29Kinds = []int{
 // Kinds only the relay may sign. See policy.RejectRelaySignedForgeries.
 var relaySignedKinds = []int{
 	threads.KindThreadState,
-	8108, // checkpoint
+	checkpoint.Kind,
 }
 
 // Who may confer a capability inside a workspace.
@@ -104,6 +105,11 @@ func run() error {
 	log.Printf("  data       %s", cfg.DataDir)
 	log.Printf("  schemas    %s", cfg.SchemaDir)
 	log.Printf("  kinds      %d supported", len(index.SupportedKindNumbers()))
+	if cfg.CheckpointEvery > 0 {
+		log.Printf("  checkpoint every %s, closing windows %s behind now", cfg.CheckpointEvery, cfg.CheckpointLag)
+	} else {
+		log.Printf("  warning    checkpoints are off; readers get ordering layers 1 and 2 only")
+	}
 	if !cfg.RequireAuth {
 		log.Printf("  warning    reads are open; set QUORUM_REQUIRE_AUTH=true to demand NIP-42")
 	}
@@ -257,7 +263,28 @@ func build(cfg config.Config) (*khatru.Relay, *protocol.Index, func(), error) {
 
 	relay.OnEventSaved = append(relay.OnEventSaved, projector.Fold, packer.Answer)
 
-	return relay, index, func() { db.Close() }, nil
+	// Ordering integrity, layer 3. Started here rather than in run() so the
+	// end-to-end tests exercise the same wiring the binary serves; the returned
+	// cleanup stops it.
+	stopCheckpoints := func() {}
+	if cfg.CheckpointEvery > 0 {
+		checkpointer, err := checkpoint.New(db, relay, cfg.SecretKey, cfg.CheckpointEvery, cfg.CheckpointLag)
+		if err != nil {
+			db.Close()
+			return nil, nil, nil, err
+		}
+		// Observe only records which groups exist. It has to run on every saved
+		// event because relay29 keeps group metadata in kinds 39000+ that are
+		// generated on demand and never stored, so nothing in the database
+		// lists the workspaces.
+		relay.OnEventSaved = append(relay.OnEventSaved, checkpointer.Observe)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		go checkpointer.Run(ctx)
+		stopCheckpoints = cancel
+	}
+
+	return relay, index, func() { stopCheckpoints(); db.Close() }, nil
 }
 
 // allowAction decides who may perform NIP-29 moderation.

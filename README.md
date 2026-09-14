@@ -32,6 +32,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`examples/echo-agent`](examples/echo-agent) | The smallest complete agent, and a narrated demo of why each part is there |
 | [`examples/deploy-agent`](examples/deploy-agent) | A gated action worth approving, plus an offline auditor that checks who approved it |
 | [`examples/claude-agent`](examples/claude-agent) | A language model reading a workspace — 500 messages into a 20k budget, with the trust boundary visible |
+| [`examples/auditor`](examples/auditor) | Not an agent: a reader catching a relay that withholds an event, and proving it to a stranger |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -103,6 +104,27 @@ Agents also remember things now, in kind 38104: addressable, signed, scoped by k
 *published*. "Why did it answer that" is a query any member of the workspace can run, rather
 than a request for shell access to the agent's host.
 
+**M7** — ordering integrity, and the end of taking the relay's word for anything. Nostr has no
+total order and a relay can silently withhold events by design. Three layers recover most of it:
+per-author `counter` tags, which let you notice you missed something from someone; causal `e`
+tags, which let you notice a missing parent; and now relay-signed checkpoints, which are the only
+one that sees an event you were never served at all.
+
+Every few minutes the relay signs a Merkle root over the ids it holds for a group in a closed
+window. That is a commitment it cannot retract. Recompute the root from what it serves later and
+you learn the set is short — which is *not yet an accusation*, because a client that backfilled
+half the window sees the same thing. But anyone holding one of the missing events can put it back
+and find that `root(served ∪ held)` is exactly the root the relay signed, and that has no innocent
+reading. [`examples/auditor`](examples/auditor) produces that proof and then checks it in a
+separate program with no relay, no keys and no network.
+
+The rule that makes it work is that a window closes a clock-skew behind now, so no honest event
+can ever arrive for a window already committed to — the relay refuses to boot if the two settings
+disagree, because getting it wrong is a false accusation rather than a degradation. The rule that
+keeps the relay from accusing itself is that only *regular* events are committed to: an
+addressable event is superseded and its id leaves the store, so a relay committing to a 38101
+would fail its own checkpoint the first time anyone changed a task's status.
+
 Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
 
 ## Try it
@@ -114,8 +136,10 @@ pnpm --filter @quorum/deploy-agent verify    # then check it, offline, from the 
 
 pnpm --filter @quorum/echo-agent demo        # the mechanics underneath: addressing, replay, leases
 pnpm --filter @quorum/claude-agent demo      # 500 messages into a 20k budget — no API key needed
+pnpm --filter @quorum/auditor demo           # a relay caught withholding, and the proof written out
+pnpm --filter @quorum/auditor verify         # the proof, checked by a program that trusts nothing
 
-pnpm check                                   # 365 tests: protocol 49, test-kit 17, sdk 246, console 34, web 19
+pnpm check                                   # 455 tests: protocol 116, test-kit 17, sdk 269, console 34, web 19
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -139,6 +163,11 @@ same pack computed twice to prove it is a function rather than a heuristic. It r
 what a model does with a fence is a real question and not one a demo can settle, so the offline
 stand-in answers by grep and says so rather than play-acting a refusal.
 
+The auditor is the odd one out: no agent, no model, nothing being asked of a human. A relay
+signs a commitment, hides an event, gets caught, and is then proven to have done it — followed by
+the four controls that keep it from crying wolf, because a mechanism that accuses an honest relay
+is worse than none at all.
+
 To see the same thing over a real socket against the Go relay:
 
 ```sh
@@ -148,6 +177,10 @@ pnpm --filter @quorum/deploy-agent live      # also checks the relay refuses thr
 
 cd apps/relay && QUORUM_EVENTS_PER_MINUTE=0 make run
 pnpm --filter @quorum/claude-agent live      # the Go packer and the TS packer, compared byte for byte
+
+cd apps/relay && QUORUM_CHECKPOINT_EVERY=5 QUORUM_CHECKPOINT_LAG=10 \
+  QUORUM_CLOCK_SKEW_SECONDS=10 make run
+pnpm --filter @quorum/auditor live           # the relay's own checkpoints, recomputed in TypeScript
 ```
 
 Or drive it yourself, as the human the agent is asking. [`apps/console`](apps/console) has the
@@ -176,4 +209,7 @@ claiming something false.
 The relay is the same claim from the other side: it is written in Go and reads the committed
 schemas as data, so it could not import the TypeScript validators even if someone wanted to.
 Three implementations — Zod, Python stdlib, Go — now validate the same golden transcript from
-the same committed artifacts.
+the same committed artifacts. The Merkle construction is held to the same standard:
+`packages/protocol/fixtures/merkle-v1.json` is 21 roots and 31 audit paths generated by
+TypeScript and consumed by the Go checkpointer, so a hash tree that only agrees with itself
+cannot pass.

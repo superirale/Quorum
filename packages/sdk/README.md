@@ -94,6 +94,7 @@ with an interest in the answer. The resource re-derives it: see `examples/deploy
 | `threads.ts` | The task list. `threadOp()` asks for a state change; `threads()` reads the answer and replays the ops the relay says it folded rather than believing the 38101 it signed. |
 | `presence.ts` | `PresenceReporter` beats kind 28103 while an agent runs; `presence()` reads the beats. Ephemeral, so an empty result means "nobody has said", never "nobody is running". |
 | `context.ts` | `packContext()` — the `extractive-v1` compactor, deterministic to the byte; `fetchContext()` asks a DVM for the same thing; `renderContext()` turns a pack into a prompt and fences what is not ours. `ctx.context()` picks between the two and the caller cannot tell which answered. |
+| `checkpoints.ts` | The reader's half of ordering integrity. `verifyWindow()` recomputes a relay's signed root from the events it served; `withholdingProof()` turns "short" into an artifact a stranger can check with `verifyWithholdingProof()`, no relay and no network. `checkChain()` walks the windows. |
 | `memory.ts` | Kind 38104, scoped by `d`. Published rather than filed away, so "why did it answer that" is a query any member can run instead of a request for shell access to the agent's host. |
 
 ## Design notes that cost something to learn
@@ -159,10 +160,32 @@ to say outside a handler: its manifest, a shift report, a note that it is going 
 first write. A gap in a sequence says the agent crashed; a duplicate says the key is in two
 places at once, which is a much more alarming thing to make somebody investigate.
 
+**A short window is not an accusation, and the two are different functions for that reason.**
+`verifyWindow` recomputing a smaller root than the relay signed is exactly what a client that
+backfilled half the window sees, so it names nobody. `withholdingProof` is the one that accuses,
+and it can only be built by someone holding an event the relay committed to and did not serve:
+`root(served ∪ held) == committed root` has no innocent reading. Both are needed — a mechanism
+that cries withholding at an honest relay is worse than no mechanism, because the first false
+accusation is the last time anybody reads the output.
+
+**The withheld events are verified too, and it is the step easiest to skip.** Without it anyone
+can invent an event, claim the relay was hiding it, and produce a failure that reads as an
+accusation gone wrong rather than as a fabrication. `verifyWithholdingProof` redoes every step
+from the bytes: the checkpoint's signature, each withheld event's signature, that each falls
+inside the committed window and group, that none was in the served set after all, and that the
+two sets together reproduce the signed root.
+
+**Only regular kinds are committed to** (`isCommittedKind`), and this is a protocol rule the
+relay applies identically. A superseded addressable event's id is gone from the store, so
+committing to a 38101 would make the relay fail its own checkpoint the first time a task changed
+status. The three copies of the rule — here, in the Go relay, in the test-kit — are the kind of
+duplication that drifts silently, so `examples/auditor live` checks it against the real relay
+rather than against another copy of the same list.
+
 ## Tests
 
 ```sh
-pnpm --filter @quorum/sdk test        # 246 tests
+pnpm --filter @quorum/sdk test        # 269 tests
 ```
 
 They run against `@quorum/test-kit`'s in-process relay: no Docker, no ports, no sleeps. Two of

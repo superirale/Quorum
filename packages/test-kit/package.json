@@ -22,12 +22,12 @@
     "test": "node --experimental-strip-types --test test/*.test.ts"
   },
   "dependencies": {
+    "@noble/curves": "^1.9.1",
+    "@noble/hashes": "^1.8.0",
     "@quorum/protocol": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@noble/curves": "^1.9.1",
-    "@noble/hashes": "^1.8.0",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.5.13",
     "typescript": "^5.9.0"

@@ -24,7 +24,7 @@
     "merkle_root": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "sha256 of the canonical JSON encoding"
+      "description": "Merkle root over the covered event ids, by `algorithm`"
     },
     "algorithm": {
       "default": "sha256-merkle-sorted-v1",
@@ -32,9 +32,9 @@
       "const": "sha256-merkle-sorted-v1"
     },
     "prev": {
+      "description": "event id of the previous checkpoint for this group",
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$",
-      "description": "sha256 of the canonical JSON encoding"
+      "pattern": "^[0-9a-f]{64}$"
     }
   },
   "required": [

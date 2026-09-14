@@ -15,17 +15,24 @@
  * those conditions on purpose.
  */
 
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { randomBytes } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import {
+  Kinds,
+  MERKLE_ALGORITHM,
+  computeId,
   isAddressable,
   isEphemeral,
   isReplaceable,
   matchFilters,
+  merkleRoot,
   tagValue,
   verifyEvent,
   type Filter,
   type NostrEvent,
+  type UnsignedEvent,
 } from '@quorum/protocol'
 import { WebSocketServer, type WebSocket } from 'ws'
 
@@ -43,6 +50,14 @@ export interface FakeRelayOptions {
   requireScopedFilters?: boolean
   /** Reject any event for which this returns a string; the string is the reason. */
   reject?: (event: NostrEvent) => string | undefined
+  /**
+   * The relay's own key, for signing checkpoints. Generated if absent.
+   *
+   * A relay needs an identity here for the same reason the real one does: a
+   * kind 8108 is only worth anything because it is *signed*, and a test that
+   * checked an unsigned commitment would be checking a suggestion.
+   */
+  secretKey?: string
 }
 
 interface Client {
@@ -60,6 +75,8 @@ export interface SeenRequest {
 
 export class FakeRelay {
   readonly url: string
+  /** The relay's own pubkey — the author of the checkpoints it signs. */
+  readonly pubkey: string
   readonly requests: SeenRequest[] = []
   /**
    * Every event the relay accepted, in arrival order — ephemeral ones included,
@@ -79,11 +96,16 @@ export class FakeRelay {
   private storage: NostrEvent[] = []
   private withheld = new Set<string>()
   private swallow: ((event: NostrEvent) => boolean) | undefined
+  private readonly secretKey: string
+  /** The newest checkpoint per group, so `prev` chains without bookkeeping. */
+  private readonly lastCheckpoint = new Map<string, NostrEvent>()
 
   private constructor(server: WebSocketServer, url: string, options: FakeRelayOptions) {
     this.server = server
     this.url = url
     this.options = options
+    this.secretKey = options.secretKey ?? randomBytes(32).toString('hex')
+    this.pubkey = bytesToHex(schnorr.getPublicKey(this.secretKey))
     server.on('connection', (socket) => this.accept(socket))
   }
 
@@ -154,6 +176,74 @@ export class FakeRelay {
   /** Number of live connections. */
   get connectionCount(): number {
     return this.clients.size
+  }
+
+  // --- checkpoints ------------------------------------------------------------
+
+  /**
+   * Sign a kind 8108 over everything the relay *holds* for a group in a window.
+   *
+   * "Holds", not "serves" — withheld events are in the commitment. That is the
+   * whole point and the only configuration in which this is worth testing: a
+   * relay that excluded what it was hiding would be committing to the lie
+   * rather than to the truth, and would never contradict itself. The real relay
+   * has no such choice, because it commits before it decides to misbehave.
+   *
+   * Window defaults to everything up to now. Chains on the last checkpoint
+   * issued for the same group.
+   */
+  checkpoint(group: string, window: { from?: number; to?: number } = {}): NostrEvent {
+    const from = window.from ?? 0
+    const to = window.to ?? Math.floor(Date.now() / 1000)
+
+    const ids = this.storage
+      .filter(
+        (event) =>
+          committed(event.kind) &&
+          tagValue(event.tags, 'h') === group &&
+          event.created_at >= from &&
+          event.created_at <= to,
+      )
+      .map((event) => event.id)
+
+    const previous = this.lastCheckpoint.get(group)
+    const body = {
+      algorithm: MERKLE_ALGORITHM,
+      count: new Set(ids).size,
+      from,
+      merkle_root: merkleRoot(ids),
+      ...(previous ? { prev: previous.id } : {}),
+      to,
+    }
+    // Keys are written in RFC 8785 order above and every value is hex or an
+    // integer, so JSON.stringify is already the canonical encoding.
+    const event = this.sign({
+      kind: Kinds.Checkpoint,
+      // Signed now, for a window that has already closed — and never inside
+      // its own window, which the real relay gets for free by closing windows
+      // a lag behind `now`. It matters because 8108 is a committed kind
+      // carrying an `h` tag: a checkpoint dated inside the window it describes
+      // would be a member of the set it is describing. The `to + 1` floor is
+      // for tests that name a window in the future.
+      created_at: Math.max(to + 1, Math.floor(Date.now() / 1000)),
+      content: JSON.stringify(body),
+      tags: [
+        ['h', group],
+        ['alt', `checkpoint: ${body.count} events held up to ${to}`],
+      ],
+      pubkey: this.pubkey,
+    })
+
+    this.lastCheckpoint.set(group, event)
+    this.received.push(event)
+    this.store(event)
+    this.broadcast(event)
+    return event
+  }
+
+  private sign(draft: UnsignedEvent): NostrEvent {
+    const id = computeId(draft)
+    return { ...draft, id, sig: bytesToHex(schnorr.sign(id, this.secretKey)) }
   }
 
   // --- inspection -----------------------------------------------------------
@@ -324,6 +414,18 @@ export class FakeRelay {
       }
     }
   }
+}
+
+/**
+ * The kinds a checkpoint commits to: everything that is not superseded.
+ *
+ * Duplicated from the SDK's `isCommittedKind` rather than imported, because
+ * test-kit is a dependency *of* the SDK and cannot import back. Three lines and
+ * a protocol rule; the SDK's checkpoint tests run against this relay, so a
+ * divergence shows up there immediately.
+ */
+function committed(kind: number): boolean {
+  return !isReplaceable(kind) && !isEphemeral(kind) && !isAddressable(kind)
 }
 
 function isScoped(filter: Filter): boolean {

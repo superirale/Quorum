@@ -47,9 +47,11 @@ Everything is environment-driven. Nothing here is secret except the key.
 | `QUORUM_FILTERS_PER_MINUTE` | `120` | per-IP subscription limit; `0` disables |
 | `QUORUM_FILTERS_BURST` | `40` | |
 | `QUORUM_CLOCK_SKEW_SECONDS` | `900` | how far `created_at` may sit from the relay's clock |
+| `QUORUM_CHECKPOINT_EVERY` | `300` | seconds between checkpoints per group; `0` disables |
+| `QUORUM_CHECKPOINT_LAG` | `900` | seconds behind now at which a window closes |
 
 The relay's key is its identity. It signs the NIP-29 group metadata clients
-trust and, from M7, the checkpoints that make withholding an event provable.
+trust and the checkpoints that make withholding an event provable.
 Losing it means every group's metadata is suddenly signed by a stranger, so it
 is written `0600` and never logged. Under Docker, mount `/var/lib/quorum`.
 
@@ -229,6 +231,65 @@ lowered.
 minute is right for a workspace and wrong for a test fixture publishing five
 hundred messages from one address.
 
+## Checkpoints
+
+Every `QUORUM_CHECKPOINT_EVERY` seconds the relay signs a kind 8108 per group: a
+Merkle root over the ids of every event it holds in a closed window, with the
+window bounds, the count, the algorithm name, and `prev`, the id of the previous
+checkpoint for that group. It is a commitment it cannot retract. Serve a set
+later that does not recompute to that root and any reader holding the missing
+event can prove the relay is withholding it — see `examples/auditor`.
+
+A window with **no events in it still gets a checkpoint**. A signed empty root
+says "I held nothing"; silence says only that the relay stopped talking, and
+those have to be distinguishable.
+
+**A window closes `QUORUM_CHECKPOINT_LAG` behind now, and the lag must be at
+least `QUORUM_CLOCK_SKEW_SECONDS`.** `RejectImplausibleTimestamps` is symmetric,
+so the relay already refuses anything dated more than the skew in the past;
+close the window a skew or more back and no honest event can ever arrive for a
+window already committed to. Layer 3 therefore adds no new refusals — the
+federation cost was paid in M2 by the skew bound itself.
+
+The relay **refuses to boot** if the lag is shorter than the skew, rather than
+clamping it. Getting it wrong is not a degradation; it is a false accusation,
+because an event landing inside a closed window makes an honest relay look like
+a caught one, and a relay silently correcting the operator's number would be
+signing windows the operator does not think it is signing.
+
+**Only regular events are committed to** (`Committed` in
+`internal/checkpoint`). Replaceable, addressable and ephemeral kinds are
+excluded, because a superseded event's id is gone from the store — commit to a
+38101 and the first status change on any task makes the next reader recompute a
+root short by one. The relay would be manufacturing evidence against itself on a
+schedule. This is a protocol rule rather than an implementation choice: a client
+recomputing the root must apply exactly the same filter, so it is in the NIP and
+mirrored in `packages/sdk/src/checkpoints.ts`. Kind 8108 is itself regular, so
+each window also commits to the checkpoints signed inside it.
+
+Two things the implementation gets asked about:
+
+- **`collect` pages backwards and narrows rather than truncates.** The store
+  cannot serve an unbounded window, and a checkpoint whose `from` is later than
+  requested is a smaller *true* claim, where one that keeps the bounds and drops
+  the events it could not read is a false one. Same `MaxLimit` trap as the
+  context packer.
+- **Finding the end of the chain reads a page of checkpoints, not one.** The
+  store orders by `created_at` and the chain is ordered by `to`. Everything
+  `Cut` writes keeps the two in step, but a checkpoint arriving by another path
+  — a restored snapshot, most plausibly — can sit at the top by `created_at`
+  while covering an older window, and continuing from it would re-cover seconds
+  already committed to. An overlap is exactly what a reader reads as a relay
+  re-cutting history, so the relay would be manufacturing the accusation out of
+  a backup restore. `TestTheChainIsFoundByWindowNotByClock` pins it.
+
+The Merkle construction is `sha256-merkle-sorted-v1`, specified in the NIP and
+implemented twice — here and in `packages/protocol/src/merkle.ts`, which
+generates the conformance fixture `fixtures/merkle-v1.json` that
+`internal/checkpoint` consumes. An odd node is **promoted, never duplicated**:
+Bitcoin's padding rule is CVE-2012-2459, under which `[a,b,c]` and `[a,b,c,c]`
+produce the same root.
+
 ## Notes for the SDK (M3)
 
 **A filter scoped only by `#p` is rejected.** relay29's
@@ -266,8 +327,11 @@ matched nothing. Read `Subscription.ClosedReason`.
   workspace nobody works in — but it means `thread_op` is not uniformly gated,
   and the day one of the other ops becomes consequential it will need its own
   resource.
-- **Checkpoints (kind 8108) are reserved but not produced.** That is M7. The
-  forgery policy already covers the kind so nobody can squat it in the meantime.
+- **Checkpoints prove withholding, not deletion.** A relay that honours a NIP-09
+  delete request for an event it has already committed to will fail its own
+  checkpoint from then on, and there is no way to distinguish that from
+  withholding by looking at the events. Retention policy and checkpoints are in
+  tension and the relay currently just lets them be.
 
 ## Dependency pins
 
