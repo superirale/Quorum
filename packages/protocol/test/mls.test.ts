@@ -9,7 +9,7 @@
  * - **group id.** A message from another channel, replayed into this one, opens
  *   fine for a reader who is in both groups and lands in a thread it was never
  *   sent to.
- * - **credential.** A member lifts another member's application message off the
+ * - **authorship.** A member lifts another member's application message off the
  *   wire and re-signs it. The group opens it under the original author's
  *   ratchet; the *signature* — which is what an approval is audited by — says
  *   somebody else wrote it.
@@ -66,7 +66,7 @@ function message(text: string, at = 3, enc: EncMode = EncMode.Mls) {
 function opener(over: Partial<MlsOpened> = {}) {
   return (): MlsOpened => ({
     plaintext: 'deploy api 1.4.2 to production',
-    credential: pubkey,
+    author: pubkey,
     epoch: 3,
     ...over,
   })
@@ -154,24 +154,24 @@ describe('openMlsEvent', () => {
     let seen: Uint8Array | undefined
     const plaintext = openMlsEvent(sealed(), (bytes) => {
       seen = bytes
-      return { plaintext: 'deploy api 1.4.2 to production', credential: pubkey, epoch: 3 }
+      return { plaintext: 'deploy api 1.4.2 to production', author: pubkey, epoch: 3 }
     })
     assert.equal(plaintext, 'deploy api 1.4.2 to production')
     assert.deepEqual(seen, CIPHERTEXT)
   })
 
-  test('rejects a message whose MLS credential is not the event author', () => {
+  test('rejects a message whose asserted author is not the event author', () => {
     // Mallory republishing Ada's message under Mallory's signature. The group
     // opens it — the ciphertext is genuine — and only this check notices that
-    // the signature and the credential name different people.
+    // the signature and the message name different people.
     assert.throws(
-      () => openMlsEvent(sealed(), opener({ credential: other })),
+      () => openMlsEvent(sealed(), opener({ author: other })),
       /republishing the other's message/,
     )
   })
 
-  test('is case-insensitive about the credential, because hex is written both ways', () => {
-    assert.doesNotThrow(() => openMlsEvent(sealed(), opener({ credential: pubkey.toUpperCase() })))
+  test('is case-insensitive about the author, because hex is written both ways', () => {
+    assert.doesNotThrow(() => openMlsEvent(sealed(), opener({ author: pubkey.toUpperCase() })))
   })
 
   test('rejects an epoch tag that disagrees with the ciphertext', () => {

@@ -1239,11 +1239,15 @@ The check is made in two places, because the credential and the message are
 legible at different moments:
 
 - **At join time, against the credential.** A KeyPackage published as a kind
-  30443 MUST carry a `basic` credential whose identity is the UTF-8 bytes of the
-  publishing pubkey's lowercase hex, and a member committing an Add MUST reject a
-  KeyPackage whose credential identity is not the `pubkey` that signed the 30443
-  carrying it. This is where the identity in the tree and the identity on the
-  relay are made one principal.
+  30443 MUST carry a `basic` credential whose identity is the publishing pubkey as
+  **32 raw bytes** — the same encoding as the `authenticated_data` below, not hex
+  and not npub — and a member committing an Add MUST reject a KeyPackage whose
+  credential identity is not the `pubkey` that signed the 30443 carrying it. This
+  is where the identity in the tree and the identity on the relay are made one
+  principal. One fact written one way in both halves of one binding: an
+  implementation that encoded the credential as hex and the `authenticated_data`
+  as raw bytes would pass both checks separately and have no single thing to
+  compare them against.
 - **Per message, against the `authenticated_data`.** An `mls` application message
   MUST carry the sender's pubkey — 32 raw bytes, not hex — as the MLS
   `authenticated_data` of its `PrivateMessage`, and a receiver MUST reject a

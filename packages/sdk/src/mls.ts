@@ -163,13 +163,20 @@ export async function mlsCiphersuite(
  * identity on the relay are the same principal. Per-message authorship is bound
  * separately and cheaply — see the note on `authenticated_data` at the top of
  * this file — because the credential is not visible to a receiver.
+ *
+ * The identity is the **32 raw bytes** of the x-only pubkey, not its hex. One
+ * encoding for one fact: `authenticated_data` already carries the pubkey that
+ * way, and two encodings of the same value in one protocol is a comparison
+ * somebody eventually gets wrong in the direction that admits a message. It is
+ * also what Marmot specifies, which costs nothing here and is the only part of
+ * its KeyPackage rules Quorum can adopt unchanged.
  */
 export async function mlsKeyPackage(
   pubkey: string,
   cs: CiphersuiteImpl,
 ): Promise<MlsIdentity> {
   return generateKeyPackage(
-    { credentialType: 'basic', identity: utf8ToBytes(pubkey.toLowerCase()) },
+    { credentialType: 'basic', identity: hexToBytes(pubkey.toLowerCase()) },
     defaultCapabilities(),
     defaultLifetime,
     [],
@@ -177,11 +184,16 @@ export async function mlsKeyPackage(
   )
 }
 
-/** The identity in a KeyPackage's basic credential, lowercase hex, or `undefined`. */
+/** The pubkey in a KeyPackage's basic credential, lowercase hex, or `undefined`. */
 export function credentialPubkey(keyPackage: KeyPackage): string | undefined {
-  const credential = keyPackage.leafNode.credential
-  if (credential.credentialType !== 'basic') return undefined
-  return new TextDecoder().decode(credential.identity).toLowerCase()
+  return basicIdentity(keyPackage.leafNode.credential)
+}
+
+/** The 32 bytes of a `basic` credential as lowercase hex; `undefined` for any other type. */
+function basicIdentity(credential: { credentialType: string; identity?: Uint8Array }): string | undefined {
+  if (credential.credentialType !== 'basic' || credential.identity === undefined) return undefined
+  if (credential.identity.length !== 32) return undefined
+  return bytesToHex(credential.identity)
 }
 
 export interface MlsCryptoDeps {
@@ -267,13 +279,11 @@ export class MlsCrypto implements ChannelSealer {
 
   /** Every member's pubkey as its credential states it, lowercase hex. */
   get members(): string[] {
-    const tree = this.require().ratchetTree
     const out: string[] = []
-    for (const node of tree) {
+    for (const node of this.require().ratchetTree) {
       if (node?.nodeType !== 'leaf') continue
-      const credential = node.leaf.credential
-      if (credential.credentialType !== 'basic') continue
-      out.push(new TextDecoder().decode(credential.identity).toLowerCase())
+      const pubkey = basicIdentity(node.leaf.credential)
+      if (pubkey !== undefined) out.push(pubkey)
     }
     return out
   }
@@ -502,7 +512,7 @@ export class MlsCrypto implements ChannelSealer {
     // honest copy — there is a test for it.
     const plaintext = openMlsEvent(event, () => ({
       plaintext: new TextDecoder().decode(result.message),
-      credential: bytesToHex(pm.authenticatedData),
+      author: bytesToHex(pm.authenticatedData),
       epoch: epochNumber(pm.epoch),
     }))
     await this.commit(result.newState)

@@ -10,7 +10,7 @@
  * those is a binding between the MLS message and the Nostr event carrying it:
  *
  * - the MLS `group_id` and the NIP-29 `h` tag are one identifier;
- * - the MLS credential identity and the event `pubkey` are one author;
+ * - the author the MLS message asserts and the event `pubkey` are one author;
  * - the MLS epoch and the `epoch` tag are one number.
  *
  * Each is a MUST in the spec and each fails silently if it is only checked in
@@ -78,13 +78,24 @@ export interface MlsOpened {
   /** The application message's plaintext: the body that would otherwise be `content`. */
   plaintext: string
   /**
-   * The identity in the sender's MLS credential, lowercase hex.
+   * The author the MLS message asserts, lowercase hex.
    *
    * Not optional, and not merely informational. This is the field
    * {@link openMlsEvent} checks the event's `pubkey` against, and an opener
    * that cannot produce it cannot satisfy the rule.
+   *
+   * It was called `credential` for two commits and the rename is the point of
+   * this comment. A receiver never sees the sender's MLS credential: RFC 9420
+   * encrypts the sender index, and a library that follows the RFC verifies the
+   * sender's signature and then hands back the plaintext with no sender in it.
+   * The assertion a receiver *can* read is the message's `authenticated_data`,
+   * which the spec requires to be the author's pubkey and which is covered by
+   * the AEAD and the sender's `FramedContent` signature. Same binding, same
+   * strength, different field — and a field named for the one place it does not
+   * come from is how an implementer concludes the check is unimplementable and
+   * quietly drops it.
    */
-  credential: string
+  author: string
   /** The epoch the ciphertext was actually encrypted under, per its own header. */
   epoch: number
 }
@@ -180,9 +191,9 @@ export function openMlsEvent(event: NostrEvent | UnsignedEvent, open: MlsOpener)
 
   const opened = open(mlsMessage(event), event)
 
-  if (opened.credential.toLowerCase() !== event.pubkey.toLowerCase()) {
+  if (opened.author.toLowerCase() !== event.pubkey.toLowerCase()) {
     throw new Error(
-      `mls: the MLS credential says ${opened.credential} and the event is signed by ` +
+      `mls: the MLS message says its author is ${opened.author} and the event is signed by ` +
         `${event.pubkey}. One of them is republishing the other's message.`,
     )
   }
