@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -101,9 +102,10 @@ func TestAPausedThreadRefusesNewWork(t *testing.T) {
 	}))
 	assertRejected(t, msg, "paused")
 
-	running := action(root.ID, map[string]any{
-		"name": "summarise", "status": "running", "summary": "keep going",
-	})
+	// A chain whose proposal this relay never stored, because the paragraph
+	// above is it being refused. The transition policies fail open on an action
+	// they do not hold, so what this event meets is the budget policy.
+	running := transition(root.ID, strings.Repeat("a1", 32), "running")
 	assertRejected(t, publish(t, agentConn, agent, running), "paused")
 }
 

@@ -71,7 +71,7 @@ import { makeKeyPackageRef, verifyKeyPackage } from 'ts-mls/keyPackage.js'
 import { decodeRatchetTree, encodeRatchetTree } from 'ts-mls/ratchetTree.js'
 import type { RelayClient } from './client.ts'
 import { MLS_CIPHERSUITE, credentialPubkey, type MlsCrypto, type MlsIdentity } from './mls.ts'
-import type { Publisher } from './publish.ts'
+import type { Publisher, PublishOptions } from './publish.ts'
 import type { Signer } from './signer.ts'
 
 /** MLS's own version label; there is exactly one and RFC 9420 fixes it. */
@@ -114,12 +114,33 @@ export async function publishKeyPackage(options: {
   identity: MlsIdentity
   ciphersuite: CiphersuiteImpl
 }): Promise<NostrEvent> {
-  const { publisher, group, identity, ciphersuite } = options
+  const { publisher, ...rest } = options
+  return publisher.publish(await mlsKeyPackageEvent(rest))
+}
+
+/**
+ * The same event, built and not published.
+ *
+ * Split out for the one caller that must not hold a `Publisher`: the
+ * conformance suite allocates its own `counter` values, and a second publisher
+ * over the same key would diverge from them on its first write and emit a
+ * duplicate — which says "this key is in two places", the most alarming thing
+ * this protocol can say about an agent. It also needs the *correct* KeyPackage,
+ * with real key material, because that is the control its wrong-slot check is
+ * measured against: a relay refusing a placeholder would look exactly like a
+ * relay enforcing the rule.
+ */
+export async function mlsKeyPackageEvent(options: {
+  group: string
+  identity: MlsIdentity
+  ciphersuite: CiphersuiteImpl
+}): Promise<PublishOptions> {
+  const { group, identity, ciphersuite } = options
   const { publicPackage } = identity
   const ref = bytesToHex(await makeKeyPackageRef(publicPackage, ciphersuite.hash))
   const capabilities = publicPackage.leafNode.capabilities
 
-  return publisher.publish({
+  return {
     kind: BorrowedKinds.MlsKeyPackage,
     group,
     d: group,
@@ -132,7 +153,7 @@ export async function publishKeyPackage(options: {
       extensions: capabilities.extensions,
       proposals: capabilities.proposals,
     }),
-  })
+  }
 }
 
 /**

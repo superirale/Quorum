@@ -254,6 +254,14 @@ func encryptChannel(t *testing.T, conn *nostr.Relay, who actor, epoch int) {
 }
 
 func action(root string, body map[string]any) *nostr.Event {
+	// A proposal with no input_digest is refused by the cross-field rules, and
+	// every caller here is building an incidental action rather than testing
+	// that rule — see internal/protocol/crossfield_test.go, which does. Filled
+	// in rather than added to six call sites, so a test added later gets a
+	// valid action without having to know why.
+	if _, ok := body["input_digest"]; !ok && body["status"] == "proposed" {
+		body["input_digest"] = strings.Repeat("d1", 32)
+	}
 	content, _ := json.Marshal(body)
 	return &nostr.Event{
 		Kind:    8101,

@@ -13,11 +13,11 @@ import { z } from 'zod'
 import { ALT_MAX_LENGTH } from '../src/alt.ts'
 import { BODY_SCHEMAS } from '../src/bodies/index.ts'
 import { NostrEventSchema } from '../src/event.ts'
-import { QUORUM_KINDS, SUPPORTED_KINDS, kindName } from '../src/kinds.ts'
+import { Kinds, QUORUM_KINDS, SUPPORTED_KINDS, kindName } from '../src/kinds.ts'
 import { INVOKE, Resource, SCOPE_GROUP } from '../src/resources.ts'
 import { UNSEALED_KINDS, UNSEALED_KIND_RANGES } from '../src/seal.ts'
 import { ADDRESS_MARKER, ENC_MODES } from '../src/tags.ts'
-import { REQUIREMENTS } from '../src/validate.ts'
+import { CROSS_FIELD_RULES, REQUIREMENTS } from '../src/validate.ts'
 import { PROTOCOL_VERSION } from '../src/version.ts'
 
 const BASE_URI = 'https://quorum.chat/schemas'
@@ -107,6 +107,14 @@ export function generate(): Record<string, unknown> {
       alt_max_length: ALT_MAX_LENGTH,
       enc_modes: ENC_MODES,
       address_marker: ADDRESS_MARKER,
+      // What a `K` tag must say on any kind whose `requires` says `threaded`.
+      // Published because presence and value are different checks and only the
+      // value one is load-bearing: a `K` of 9 says the root scope is a chat
+      // message, which is not a thread, so every reader resolving `E` gets an
+      // event that has no task, no state and no 38101 — and nothing about the
+      // event is otherwise wrong. Found by the conformance suite, which is the
+      // first thing to have ever asked both implementations the same question.
+      thread_root_kind: String(Kinds.Thread),
       // On a channel whose policy says `nip44`, every kind except these must
       // carry sealed content. Published as data and written as exceptions so
       // that a kind added later is sealed by default in every implementation
@@ -120,6 +128,17 @@ export function generate(): Record<string, unknown> {
       content:
         'canonical JSON (RFC 8785) of the body schema, or plain text for kinds 9, 11 and 1111',
     },
+    // The rules a JSON Schema cannot carry, published as the list another
+    // implementation is held to. Not the rules themselves — each one is a few
+    // lines of ordinary code, and a schema language for them would be a second
+    // protocol to keep in sync. Just the names, so a relay can be asked whether
+    // it implements all of them and can refuse to start when it does not. See
+    // CROSS_FIELD_RULES in src/validate.ts.
+    cross_field_rules: CROSS_FIELD_RULES.map((rule) => ({
+      code: rule.code,
+      kinds: rule.kinds.map(String),
+      what: rule.what,
+    })),
   }
 
   return files

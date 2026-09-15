@@ -206,6 +206,7 @@
       "mls"
     ],
     "address_marker": "to",
+    "thread_root_kind": "11",
     "unsealed_kinds": [
       "7000",
       "8108",
@@ -232,5 +233,74 @@
       }
     ],
     "content": "canonical JSON (RFC 8785) of the body schema, or plain text for kinds 9, 11 and 1111"
-  }
+  },
+  "cross_field_rules": [
+    {
+      "code": "missing_input_digest",
+      "kinds": [
+        "8101",
+        "8102"
+      ],
+      "what": "a proposed action, and an approval request tied to one, must carry `input_digest`"
+    },
+    {
+      "code": "missing_action_tag",
+      "kinds": [
+        "8101",
+        "28101"
+      ],
+      "what": "an action event after `proposed`, and an action-scoped interrupt, must name its action"
+    },
+    {
+      "code": "unreachable_quorum",
+      "kinds": [
+        "8102"
+      ],
+      "what": "an approval request may not require more approvals than it addresses approvers"
+    },
+    {
+      "code": "missing_modified_digest",
+      "kinds": [
+        "8103"
+      ],
+      "what": "an approval response carrying `modified_input` must carry its digest"
+    },
+    {
+      "code": "many_recipients",
+      "kinds": [
+        "8110",
+        "8111"
+      ],
+      "what": "a wrapped key and a Welcome are each addressed to exactly one member"
+    },
+    {
+      "code": "recipient_mismatch",
+      "kinds": [
+        "8110",
+        "8111"
+      ],
+      "what": "the addressed member and the body’s `recipient` must be the same member"
+    },
+    {
+      "code": "mls_policy_epoch",
+      "kinds": [
+        "38107"
+      ],
+      "what": "an `mls` channel policy must not state an epoch"
+    },
+    {
+      "code": "missing_epoch",
+      "kinds": [
+        "38107"
+      ],
+      "what": "a `nip44` channel policy must state the epoch writers seal under"
+    },
+    {
+      "code": "bad_thread_d",
+      "kinds": [
+        "38101"
+      ],
+      "what": "thread state is keyed by the 64-hex id of its kind 11 root"
+    }
+  ]
 }

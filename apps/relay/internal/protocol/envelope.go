@@ -102,8 +102,21 @@ func (i *Index) validateRequirements(event *nostr.Event, definition Kind) error 
 		if firstTagValue(event, TagRootEvent) == "" {
 			return fmt.Errorf("a %s event must carry an `E` tag naming its thread", definition.Name)
 		}
-		if firstTagValue(event, TagRootKind) == "" {
+		rootKind := firstTagValue(event, TagRootKind)
+		if rootKind == "" {
 			return fmt.Errorf("a %s event must carry a `K` tag naming its thread's kind", definition.Name)
+		}
+		// Presence was checked here for eight milestones and the value was not,
+		// which made the tag decorative: `K` of 9 says this event's root scope
+		// is a chat message. Nothing else about such an event is wrong — it is
+		// signed, in a group, `E`-tagged at a real id — so every reader follows
+		// the `E`, finds something that is not a thread, and finds no 38101
+		// state, no assignee and no budget for work that is underway.
+		if rootKind != i.Envelope.ThreadRootKind {
+			return fmt.Errorf(
+				"a %s event's `K` tag must say %s, the thread root kind, but says %s",
+				definition.Name, i.Envelope.ThreadRootKind, rootKind,
+			)
 		}
 	}
 
@@ -139,17 +152,25 @@ func (i *Index) validateRequirements(event *nostr.Event, definition Kind) error 
 	return nil
 }
 
-// ValidateBody checks content against the kind's JSON Schema.
+// ValidateBody checks content against the kind's JSON Schema, and then against
+// the rules a JSON Schema cannot carry.
 //
 // Separate from ValidateEnvelope because it is only possible on plaintext
 // channels. Callers must skip it when `enc` is anything else.
 func (i *Index) ValidateBody(event *nostr.Event) error {
+	definition, _ := i.Kind(event.Kind)
+
 	body, ok := i.Body(event.Kind)
 	if !ok {
 		return nil
 	}
 	if err := body.Validate(event.Content); err != nil {
-		definition, _ := i.Kind(event.Kind)
+		return fmt.Errorf("invalid %s body: %w", definition.Name, err)
+	}
+	// Schema first, always: a rule here reads fields by name and would report a
+	// missing `input_digest` on a body whose real problem is that `status` is a
+	// number.
+	if err := i.validateCrossFields(event, event.Content); err != nil {
 		return fmt.Errorf("invalid %s body: %w", definition.Name, err)
 	}
 	return nil

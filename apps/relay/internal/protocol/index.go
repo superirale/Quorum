@@ -53,6 +53,12 @@ type Envelope struct {
 	// channels that believe they are private, and nothing would report it.
 	UnsealedKinds      []string    `json:"unsealed_kinds"`
 	UnsealedKindRanges []KindRange `json:"unsealed_kind_ranges"`
+
+	// What a `K` tag must say on a threaded kind. Read from the table rather
+	// than written as 11 here for the reason every other number in this struct
+	// is: the value is the whole check, and a Go copy of it that drifted would
+	// admit events naming a root scope that is not a thread.
+	ThreadRootKind string `json:"thread_root_kind"`
 }
 
 // KindRange is a contiguous span of kinds that stays in the clear, with the
@@ -79,13 +85,40 @@ type RelayEnforced struct {
 	Resources map[string]string `json:"resources"`
 }
 
+// CrossFieldRule is one rule that spans a field and a tag, or two fields, and
+// therefore cannot be carried by a JSON Schema.
+//
+// Only the name and the kinds travel. The rule itself is a few lines of
+// ordinary code in each implementation; what is published is enough to ask this
+// relay whether it has all of them. See internal/protocol/crossfield.go and
+// CROSS_FIELD_RULES in packages/protocol/src/validate.ts.
+type CrossFieldRule struct {
+	Code  string   `json:"code"`
+	Kinds []string `json:"kinds"`
+	What  string   `json:"what"`
+}
+
+// KindNumbers parses the published kind list.
+func (r CrossFieldRule) KindNumbers() ([]int, error) {
+	numbers := make([]int, 0, len(r.Kinds))
+	for _, key := range r.Kinds {
+		number, err := strconv.Atoi(key)
+		if err != nil {
+			return nil, fmt.Errorf("cross-field rule %q names a non-numeric kind %q", r.Code, key)
+		}
+		numbers = append(numbers, number)
+	}
+	return numbers, nil
+}
+
 // Index is schemas/index.json, plus the body schemas resolved alongside it.
 type Index struct {
-	Version        string          `json:"version"`
-	Kinds          map[string]Kind `json:"kinds"`
-	SupportedKinds []string        `json:"supported_kinds"`
-	RelayEnforced  RelayEnforced   `json:"relay_enforced"`
-	Envelope       Envelope        `json:"envelope"`
+	Version         string           `json:"version"`
+	Kinds           map[string]Kind  `json:"kinds"`
+	SupportedKinds  []string         `json:"supported_kinds"`
+	RelayEnforced   RelayEnforced    `json:"relay_enforced"`
+	Envelope        Envelope         `json:"envelope"`
+	CrossFieldRules []CrossFieldRule `json:"cross_field_rules"`
 
 	// Derived at load time so the hot path does no string parsing.
 	byKind    map[int]Kind
@@ -109,6 +142,13 @@ func Load(dir string) (*Index, error) {
 	}
 	if len(index.Kinds) == 0 {
 		return nil, fmt.Errorf("the protocol index declares no kinds; is %s the right directory?", dir)
+	}
+	// An absent value here would not fail: it would compare every `K` tag
+	// against "" and refuse every threaded event, which is the loud direction —
+	// but the check is cheap and the alternative is an operator debugging a
+	// relay that rejects all chat because a schema directory is a version old.
+	if index.Envelope.ThreadRootKind == "" {
+		return nil, fmt.Errorf("the protocol index publishes no thread_root_kind; regenerate the schemas")
 	}
 
 	index.byKind = make(map[int]Kind, len(index.Kinds))
@@ -185,6 +225,14 @@ func Load(dir string) (*Index, error) {
 	}
 	if index.Envelope.AltMaxLength <= 0 {
 		return nil, fmt.Errorf("the protocol index declares no alt length limit")
+	}
+
+	// Checked here rather than from main.go — unlike ConfirmResourceNames, which
+	// lives in another package and has to be wired — because a cross-field rule
+	// this relay does not implement is invisible at runtime, and a boot check
+	// somebody can forget to register is the same hole one layer up.
+	if err := index.ConfirmCrossFieldRules(); err != nil {
+		return nil, err
 	}
 
 	return &index, nil

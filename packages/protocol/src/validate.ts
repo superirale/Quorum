@@ -294,6 +294,108 @@ export function validateBody(event: NostrEvent): BodyResult {
   return { ...ok(crossFieldIssues(event, result.data)), body: result.data }
 }
 
+/** One cross-field rule, as the other implementations are told about it. */
+export interface CrossFieldRule {
+  /** The `Issue.code` this rule raises. */
+  code: string
+  /** The kinds it applies to. */
+  kinds: number[]
+  /** What it requires, in one line, for a reader of the published table. */
+  what: string
+}
+
+/**
+ * Every cross-field rule, published so another implementation can be held to
+ * the same list.
+ *
+ * This table exists because of a failure that has now happened four times: a
+ * rule expressible only in TypeScript is a rule the Go relay does not have, and
+ * nothing anywhere reports the difference. `ConfirmResourceNames`,
+ * `UNSEALED_KINDS` and `RejectMlsPolicyEpoch` each closed one instance by
+ * publishing the data behind it. The fifth was found by `@quorum/conformance`
+ * asking both implementations the same question — a proposed action with no
+ * `input_digest`, refused here and stored there — and a suite that finds one
+ * instance of a recurring class should close the class.
+ *
+ * So the codes are data. The Go relay reads this table at boot and **refuses to
+ * start** if it is published a rule it does not implement, which is the same
+ * stance the resource names take and for the same reason: a check that silently
+ * never fires is worse than an absent one, because the relay goes on saying it
+ * enforces the rule.
+ *
+ * Warnings are deliberately not here. They change nothing about whether an
+ * event is stored, so an implementation that omits one is not a relay with a
+ * hole in it.
+ */
+export const CROSS_FIELD_RULES: readonly CrossFieldRule[] = Object.freeze([
+  {
+    code: 'missing_input_digest',
+    kinds: [RegularKinds.Action, RegularKinds.ApprovalRequest],
+    what: 'a proposed action, and an approval request tied to one, must carry `input_digest`',
+  },
+  {
+    code: 'missing_action_tag',
+    kinds: [RegularKinds.Action, EphemeralKinds.Interrupt],
+    what: 'an action event after `proposed`, and an action-scoped interrupt, must name its action',
+  },
+  {
+    code: 'unreachable_quorum',
+    kinds: [RegularKinds.ApprovalRequest],
+    what: 'an approval request may not require more approvals than it addresses approvers',
+  },
+  {
+    code: 'missing_modified_digest',
+    kinds: [RegularKinds.ApprovalResponse],
+    what: 'an approval response carrying `modified_input` must carry its digest',
+  },
+  {
+    code: 'many_recipients',
+    kinds: [RegularKinds.ChannelKey, RegularKinds.MlsWelcome],
+    what: 'a wrapped key and a Welcome are each addressed to exactly one member',
+  },
+  {
+    code: 'recipient_mismatch',
+    kinds: [RegularKinds.ChannelKey, RegularKinds.MlsWelcome],
+    what: 'the addressed member and the body’s `recipient` must be the same member',
+  },
+  {
+    code: 'mls_policy_epoch',
+    kinds: [AddressableKinds.ChannelPolicy],
+    what: 'an `mls` channel policy must not state an epoch',
+  },
+  {
+    code: 'missing_epoch',
+    kinds: [AddressableKinds.ChannelPolicy],
+    what: 'a `nip44` channel policy must state the epoch writers seal under',
+  },
+  {
+    code: 'bad_thread_d',
+    kinds: [AddressableKinds.ThreadState],
+    what: 'thread state is keyed by the 64-hex id of its kind 11 root',
+  },
+])
+
+const CROSS_FIELD_CODES = new Set(CROSS_FIELD_RULES.map((rule) => rule.code))
+
+/**
+ * An error from a cross-field rule, refused unless the rule is published.
+ *
+ * The guard is the point of the table: a rule added here and not to
+ * `CROSS_FIELD_RULES` would be enforced by this package and by nothing else,
+ * which is the exact failure the table exists to end. Throwing rather than
+ * warning because it is a programming error in this file, caught by the first
+ * test that exercises the new rule, and never reachable from any input.
+ */
+function crossErr(code: string, message: string, at: string): Issue {
+  if (!CROSS_FIELD_CODES.has(code)) {
+    throw new Error(
+      `cross-field rule "${code}" is not in CROSS_FIELD_RULES, so no other implementation ` +
+        'is told it exists; add it to the table',
+    )
+  }
+  return err(code, message, at)
+}
+
 /**
  * Rules that span fields, or span a field and a tag.
  *
@@ -303,6 +405,9 @@ export function validateBody(event: NostrEvent): BodyResult {
  * implementations validate against — present in TypeScript, missing everywhere
  * else, with no error to notice. The duplication is the price of the schema
  * being honest about what it checks.
+ *
+ * Each error below is raised through {@link crossErr}, which will not let a rule
+ * exist here without also appearing in {@link CROSS_FIELD_RULES}.
  */
 function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
   const issues: Issue[] = []
@@ -312,7 +417,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     if (body.status === 'proposed') {
       if (!body.input_digest) {
         issues.push(
-          err(
+          crossErr(
             'missing_input_digest',
             'a proposed action must carry input_digest; an approval that cannot name its arguments authorises the action name forever',
             'content.input_digest',
@@ -321,7 +426,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
       }
     } else if (!tagValue(tags, TagName.Action)) {
       issues.push(
-        err(
+        crossErr(
           'missing_action_tag',
           'only a `proposed` action opens a chain; every later status needs an `action` tag naming it',
           'action',
@@ -336,7 +441,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
   if (kind === RegularKinds.ApprovalRequest) {
     if (tagValue(tags, TagName.Action) && !body.input_digest) {
       issues.push(
-        err(
+        crossErr(
           'missing_input_digest',
           'an approval request tied to an action must bind to its input_digest',
           'content.input_digest',
@@ -346,7 +451,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     const required = body.required ?? 1
     if (required > addressees(tags).length) {
       issues.push(
-        err(
+        crossErr(
           'unreachable_quorum',
           `required is ${required} but only ${addressees(tags).length} approvers are addressed`,
           'content.required',
@@ -358,7 +463,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
   if (kind === RegularKinds.ApprovalResponse) {
     if (body.modified_input !== undefined && !body.modified_input_digest) {
       issues.push(
-        err(
+        crossErr(
           'missing_modified_digest',
           'modified_input requires modified_input_digest, or the log records one thing and the agent runs another',
           'content.modified_input_digest',
@@ -374,7 +479,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     // everything in the thread. Say which.
     if ((body.scope ?? 'action') === 'action' && !tagValue(tags, TagName.Action)) {
       issues.push(
-        err(
+        crossErr(
           'missing_action_tag',
           'an action-scoped interrupt must carry an `action` tag naming what to stop; use scope "thread" to stop everything',
           'action',
@@ -407,7 +512,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     const to = addressees(tags)
     if (to.length > 1) {
       issues.push(
-        err(
+        crossErr(
           'many_recipients',
           `a wrapped key is for one member; this one is addressed to ${to.length}. Publish one event per recipient`,
           'p',
@@ -417,7 +522,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
       const addressed = to[0]!.slice(0, 8)
       const named = String(body.recipient).slice(0, 8)
       issues.push(
-        err(
+        crossErr(
           'recipient_mismatch',
           `addressed to ${addressed}… but the body says ${named}…; the reader who finds it is not the one who can open it`,
           'content.recipient',
@@ -442,7 +547,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     if (body.enc === 'mls') {
       if (body.epoch !== undefined) {
         issues.push(
-          err(
+          crossErr(
             'mls_policy_epoch',
             'an mls channel policy must not state an epoch: the ratchet is the only thing that knows it, and a commit from any member makes this number wrong',
             'content.epoch',
@@ -451,7 +556,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
       }
     } else if (body.enc === 'nip44' && body.epoch === undefined) {
       issues.push(
-        err(
+        crossErr(
           'missing_epoch',
           'a nip44 channel policy must state the epoch writers should seal under, or nobody can tell a rotation from a missing key',
           'content.epoch',
@@ -464,7 +569,7 @@ function crossFieldIssues(event: NostrEvent, body: any): Issue[] {
     const d = tagValue(tags, TagName.Identifier)
     if (d && !/^[0-9a-f]{64}$/.test(d)) {
       issues.push(
-        err('bad_thread_d', 'thread_state `d` must be the 64-hex id of the kind:11 root', 'd'),
+        crossErr('bad_thread_d', 'thread_state `d` must be the 64-hex id of the kind:11 root', 'd'),
       )
     }
   }

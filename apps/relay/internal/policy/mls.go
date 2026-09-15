@@ -81,36 +81,12 @@ func RequireKeyPackageSlot() func(context.Context, *nostr.Event) (bool, string) 
 	}
 }
 
-// RequireOneWelcomeRecipient refuses a kind 8111 addressed to more than one
-// member.
-//
-// The protocol index already requires *at least* one, because a Welcome nobody
-// is addressed by is invisible to the `#p` filter every reader uses. This is the
-// other end of the same rule, and it is a tag check rather than a body check on
-// purpose: it has to keep working on a channel whose bodies this relay cannot
-// read.
-//
-// One commit produces one Welcome and the committer publishes it once per
-// recipient, so a second `to` tag is always a mistake — and a quiet one. A
-// Welcome carries key material sealed to a single member's KeyPackage, so the
-// other addressee fetches it, fails to find their own package among its secrets,
-// and is required by the spec to treat that as "not mine" rather than as an
-// error. They are told nothing. The member who was owed a Welcome waits for one
-// that was, from their point of view, never sent.
-func RequireOneWelcomeRecipient(index *protocol.Index) func(context.Context, *nostr.Event) (bool, string) {
-	return func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
-		if event.Kind != KindMlsWelcome {
-			return false, ""
-		}
-		if to := index.Addressees(event); len(to) > 1 {
-			return true, fmt.Sprintf(
-				"invalid: a Welcome carries key material for one member and this one is addressed to %d; "+
-					"publish one per recipient, or the others cannot tell \"not mine\" from \"tampered with\"",
-				len(to))
-		}
-		return false, ""
-	}
-}
+// The "a Welcome names exactly one member" rule was a policy here and is now
+// the `many_recipients` cross-field rule in internal/protocol/crossfield.go,
+// alongside `recipient_mismatch`, which is the same event's other half. It
+// moved because TypeScript already enforced both and nothing held the two
+// implementations to the same list; the list is now published, and this relay
+// refuses to boot without all of it. The rule itself is unchanged.
 
 // SerialiseCommits keeps at most one kind 8112 per group per epoch.
 //
@@ -203,52 +179,11 @@ func SerialiseCommits(store Lookup) func(context.Context, *nostr.Event) (bool, s
 	}
 }
 
-// RejectMlsPolicyEpoch refuses a kind 38107 that says `mls` and states an epoch.
-//
-// The rule is the spec's, under "An mls policy states no epoch": the MLS epoch
-// is a property of the ratchet, advanced by every commit any member makes, so a
-// number written into a policy event is stale the instant somebody adds a
-// member — and stale in the damaging direction, since a client that believes it
-// is sealing at the current epoch is sealing at one the group has left.
-//
-// # Why it is here rather than in the schema
-//
-// It is a cross-field rule — `epoch` is legal on a `nip44` policy and mandatory
-// there — and `z.toJSONSchema()` cannot express the dependency, so it lives in
-// `crossFieldIssues()` in TypeScript and is invisible to the committed schemas
-// this relay validates from. Found by act 1 of `examples/mls-channel/src/live.ts`,
-// which published one and watched it stored: every TypeScript client in the
-// repo refuses to parse that event, which is worse than either extreme. An
-// admin can brick a channel with a policy the relay accepts and no client will
-// read, and the symptom is a workspace that has no encryption policy at all.
-//
-// Same stance as ConfirmResourceNames and the UNSEALED_KINDS table: a rule that
-// exists in one language is a rule the other implementation does not have.
-func RejectMlsPolicyEpoch() func(context.Context, *nostr.Event) (bool, string) {
-	return func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
-		if event.Kind != KindChannelPolicy {
-			return false, ""
-		}
-		var body struct {
-			Enc   string `json:"enc"`
-			Epoch *int   `json:"epoch"`
-		}
-		// A body this relay cannot parse is not this check's business; the
-		// schema validator upstream has already refused it, and answering
-		// "reject" here would attribute that refusal to the wrong rule.
-		if json.Unmarshal([]byte(event.Content), &body) != nil {
-			return false, ""
-		}
-		if body.Enc != protocol.EncMls || body.Epoch == nil {
-			return false, ""
-		}
-		return true, fmt.Sprintf(
-			"invalid: an mls channel policy must not state an epoch, and this one says %d; "+
-				"the ratchet is the only thing that knows the epoch, and a commit from any member "+
-				"makes this number wrong",
-			*body.Epoch)
-	}
-}
+// "An `mls` policy states no epoch" was a policy here too, and is now the
+// `mls_policy_epoch` cross-field rule. It was the fourth instance of a rule
+// living in TypeScript and nowhere else; the fifth is what produced
+// crossfield.go, where its reasoning — and its `missing_epoch` twin, which the
+// `nip44` half of the same field needs — now lives.
 
 // commitEpoch reads the one field of an 8112 this relay understands.
 func commitEpoch(event *nostr.Event) (int, bool) {

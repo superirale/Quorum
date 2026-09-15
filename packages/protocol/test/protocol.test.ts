@@ -16,6 +16,7 @@ import {
   build,
   buildComment,
   buildThread,
+  CROSS_FIELD_RULES,
   canonicalJson,
   computeId,
   defaultAlt,
@@ -807,5 +808,159 @@ describe('build() guards', () => {
     })
     assert.equal(thread.kind, 11)
     assert.equal(thread.tags.find((t) => t[0] === 'title')?.[1], 'Ship it')
+  })
+})
+
+describe('the cross-field rules are published, not only enforced', () => {
+  // Four times now, a rule expressible only in TypeScript has turned out to be
+  // a rule the Go relay does not have: the resource names, the UNSEALED_KINDS
+  // table, the `mls` policy epoch, and — found by `@quorum/conformance` asking
+  // both implementations the same question — a proposed action with no
+  // `input_digest`, refused here and stored there.
+  //
+  // `CROSS_FIELD_RULES` is the answer: the codes go into schemas/index.json and
+  // the relay refuses to boot when it is published one it does not implement.
+  // Which makes the table load-bearing in a new way. A code published here and
+  // raised by nothing would require every other implementation to enforce a
+  // rule that does not exist, and a rule raised here and published nowhere is
+  // the original problem again. So the table is executed: one violating event
+  // per code, built the way a confused client would build it.
+
+  const violations: Record<string, () => NostrEvent> = {
+    missing_input_digest: () =>
+      stub(
+        build({
+          kind: RegularKinds.Action,
+          pubkey: BOT,
+          group: GROUP,
+          thread: THREAD,
+          counter: 1,
+          body: { name: 'deploy.production', status: 'proposed', summary: 'ship it' },
+        }),
+      ),
+    missing_action_tag: () =>
+      stub(
+        build({
+          kind: RegularKinds.Action,
+          pubkey: BOT,
+          group: GROUP,
+          thread: THREAD,
+          counter: 1,
+          body: { name: 'deploy.production', status: 'running', summary: 'ship it' },
+        }),
+      ),
+    unreachable_quorum: () =>
+      stub(
+        build({
+          kind: RegularKinds.ApprovalRequest,
+          pubkey: BOT,
+          group: GROUP,
+          thread: THREAD,
+          to: [ADA],
+          counter: 1,
+          body: { title: 'Deploy', summary: 'to production', risk: 'high', required: 2 },
+        }),
+      ),
+    missing_modified_digest: () =>
+      stub(
+        build({
+          kind: RegularKinds.ApprovalResponse,
+          pubkey: ADA,
+          group: GROUP,
+          thread: THREAD,
+          parent: { id: fixture.action, kind: RegularKinds.ApprovalRequest, pubkey: BOT },
+          counter: 1,
+          body: {
+            decision: 'approved',
+            input_digest: fixture.input_digest,
+            modified_input: { replicas: 2 },
+          },
+        }),
+      ),
+    many_recipients: () =>
+      stub(
+        build({
+          kind: RegularKinds.ChannelKey,
+          pubkey: ADA,
+          group: GROUP,
+          to: [BOT, 'c'.repeat(64)],
+          counter: 1,
+          body: { epoch: 2, key: 'A'.repeat(140), recipient: BOT },
+        }),
+      ),
+    recipient_mismatch: () =>
+      stub(
+        build({
+          kind: RegularKinds.ChannelKey,
+          pubkey: ADA,
+          group: GROUP,
+          to: ['c'.repeat(64)],
+          counter: 1,
+          body: { epoch: 2, key: 'A'.repeat(140), recipient: BOT },
+        }),
+      ),
+    mls_policy_epoch: () =>
+      stub(
+        build({
+          kind: AddressableKinds.ChannelPolicy,
+          pubkey: ADA,
+          group: GROUP,
+          d: GROUP,
+          counter: 1,
+          body: { enc: 'mls', epoch: 1 },
+        }),
+      ),
+    missing_epoch: () =>
+      stub(
+        build({
+          kind: AddressableKinds.ChannelPolicy,
+          pubkey: ADA,
+          group: GROUP,
+          d: GROUP,
+          counter: 1,
+          body: { enc: 'nip44' },
+        }),
+      ),
+    bad_thread_d: () =>
+      stub(
+        build({
+          kind: AddressableKinds.ThreadState,
+          pubkey: ADA,
+          group: GROUP,
+          d: 'the-deploy-thread',
+          counter: 1,
+          body: { status: 'open' },
+        }),
+      ),
+  }
+
+  for (const rule of CROSS_FIELD_RULES) {
+    test(`${rule.code}: ${rule.what}`, () => {
+      const violate = violations[rule.code]
+      assert.ok(violate, `${rule.code} is published and nothing here violates it`)
+      assert.ok(
+        errorCodes(violate()).includes(rule.code),
+        `${rule.code} is published but this event did not raise it`,
+      )
+    })
+  }
+
+  test('and nothing is enforced that is not published', () => {
+    // The other direction, and the one `crossErr` already refuses at the point
+    // of use — this is the assertion that says so out loud, and that the table
+    // is a table rather than a list that happens to be right today.
+    assert.deepEqual(
+      Object.keys(violations).sort(),
+      CROSS_FIELD_RULES.map((rule) => rule.code).sort(),
+    )
+  })
+
+  test('every rule names the kinds it applies to, and they are Quorum kinds', () => {
+    for (const rule of CROSS_FIELD_RULES) {
+      assert.ok(rule.kinds.length > 0, `${rule.code} applies to nothing`)
+      for (const kind of rule.kinds) {
+        assert.ok(QUORUM_KINDS.includes(kind), `${rule.code} names kind ${kind}, which is not ours`)
+      }
+    }
   })
 })
