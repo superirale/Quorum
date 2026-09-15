@@ -17,6 +17,7 @@
     "dist"
   ],
   "scripts": {
+    "prestart": "pnpm --filter @quorum/protocol --filter @quorum/sdk build",
     "start": "node --experimental-strip-types src/cli.ts",
     "prebuild": "pnpm --filter @quorum/protocol --filter @quorum/sdk build",
     "build": "tsc -p tsconfig.json",
