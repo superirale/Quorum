@@ -278,7 +278,10 @@ describe('SealedEnvelopes', () => {
 
     release()
     const sealed = await pending
-    assert.deepEqual(await store.get('sealed:plaintext-id'), sealed)
+    assert.deepEqual(
+      (await store.get<{ sealed: unknown }>('sealed:plaintext-id'))?.sealed,
+      sealed,
+    )
   })
 
   it('keys on the plaintext id, so two different bodies get two envelopes', async () => {
@@ -294,5 +297,44 @@ describe('SealedEnvelopes', () => {
     await envelopes.forget('one')
     const again = await envelopes.sealOnce('one', () => ({ ...event(), content: 'B' }))
     assert.equal(again.content, 'B')
+  })
+
+  describe('what the author said', () => {
+    it('keys the plaintext by the sealed id, which is the id every reader will ask about', async () => {
+      // Not the plaintext id this cache is filed under. That one exists so a
+      // retry can find its envelope; nobody outside this class has ever seen it,
+      // because the event on the wire is the sealed one.
+      const envelopes = new SealedEnvelopes(new MemoryStore())
+      const sealed = { ...event(), content: 'Y2lwaGVydGV4dA==' }
+      await envelopes.put('plaintext-id', sealed, 'deploy api 1.4.2')
+
+      assert.deepEqual(
+        [...(await envelopes.spoken('ops'))],
+        [[computeId(sealed), 'deploy api 1.4.2']],
+      )
+    })
+
+    it('says nothing about an envelope stored without one', async () => {
+      // The control, and it is the `nip44` path: sealing there is a pure
+      // function its own author can reverse, so there is nothing to remember and
+      // a cache that invented an entry would put a plaintext in the record that
+      // nobody asked it to keep.
+      const envelopes = new SealedEnvelopes(new MemoryStore())
+      await envelopes.put('plaintext-id', event())
+      assert.equal((await envelopes.spoken('ops')).size, 0)
+    })
+
+    it('keeps two channels apart in one store', async () => {
+      // The console gives each channel its own file and a future caller need
+      // not. Handing `#ops`'s outgoing half to `#payments` would show a member
+      // sentences from a channel this query was not about — the failure mode the
+      // archive's own group scoping exists for, one class along.
+      const envelopes = new SealedEnvelopes(new MemoryStore())
+      await envelopes.put('one', { ...event({ group: 'ops' }) }, 'said in ops')
+      await envelopes.put('two', { ...event({ group: 'payments' }) }, 'said in payments')
+
+      assert.deepEqual([...(await envelopes.spoken('ops')).values()], ['said in ops'])
+      assert.deepEqual([...(await envelopes.spoken('payments')).values()], ['said in payments'])
+    })
   })
 })

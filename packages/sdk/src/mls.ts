@@ -484,9 +484,28 @@ export class MlsCrypto implements ChannelSealer {
     if (encOf(unsigned.tags) !== EncMode.Mls) return unsigned
     if (unsigned.content === '') return unsigned
     const plaintextId = computeId(unsigned)
-    return this.deps.envelopes.sealOnce<UnsignedEvent>(plaintextId, () =>
-      this.serial(() => this.ratchetSeal(unsigned)),
+    const sealed = await this.deps.envelopes.sealOnce<UnsignedEvent>(
+      plaintextId,
+      () => this.serial(() => this.ratchetSeal(unsigned)),
+      // Handed to the cache because this is the last moment anybody holding
+      // this state can read it. See below.
+      unsigned.content,
     )
+    // **An author cannot open their own message, and that is not a bug here.**
+    // `createApplicationMessage` advances this member's own sender ratchet past
+    // the generation it just used, so `processPrivateMessage` on the result
+    // answers "Desired gen in the past". Every other member reads it fine; the
+    // sender is the one member for whom the message is already in the past, and
+    // there is no key anyone could hand over to fix that — the whole channel's
+    // forward secrecy is made of that deletion.
+    //
+    // So what this client said is remembered here rather than recovered later.
+    // Without it a member's own words are the one part of a channel they can
+    // never read back: a feed shows their sentences as unreadable, `warm()`
+    // loads everyone else's, and an audit of an action this agent proposed has
+    // a hole exactly where its own proposal was.
+    this.plaintexts.set(computeId(sealed), unsigned.content)
+    return sealed
   }
 
   private async ratchetSeal(unsigned: UnsignedEvent): Promise<UnsignedEvent> {
@@ -533,7 +552,18 @@ export class MlsCrypto implements ChannelSealer {
     }
 
     const remembered = this.plaintexts.get(event.id)
-    if (remembered !== undefined) return remembered
+    if (remembered !== undefined) {
+      // The ordinary way here is this client's own message arriving back off
+      // the relay, and it is the first time the *signed* envelope has been in
+      // hand — `seal()` only ever saw the unsigned one, because the `Publisher`
+      // signs after sealing. The archive wants the signature, so the record is
+      // completed at this moment rather than at publish time. Guarded on `has`
+      // so a re-read of somebody else's message is not a write.
+      if (!(await this.deps.archive.has(this.deps.group, event.id))) {
+        await this.deps.archive.record(event, remembered)
+      }
+      return remembered
+    }
 
     const archived = await this.deps.archive.get(this.deps.group, event.id)
     if (archived?.plaintext !== undefined) {
@@ -620,6 +650,13 @@ export class MlsCrypto implements ChannelSealer {
   async warm(): Promise<number> {
     for (const record of await this.deps.archive.all(this.deps.group)) {
       if (record.plaintext !== undefined) this.plaintexts.set(record.event.id, record.plaintext)
+    }
+    // The outgoing half, which the archive does not hold until each event has
+    // been back past `open()`. A restart between publishing and seeing one's
+    // own message returned would otherwise lose it permanently, since the
+    // ratchet has never been able to reopen it. See {@link seal}.
+    for (const [id, plaintext] of await this.deps.envelopes.spoken(this.deps.group)) {
+      this.plaintexts.set(id, plaintext)
     }
     return this.plaintexts.size
   }

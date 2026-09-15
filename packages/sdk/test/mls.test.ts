@@ -29,7 +29,16 @@ import {
   type NostrEvent,
   type UnsignedEvent,
 } from '@quorum/protocol'
-import { decodeMlsMessage, encodeMlsMessage, type CiphersuiteImpl } from 'ts-mls'
+import { hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js'
+import {
+  createApplicationMessage,
+  createGroup,
+  decodeMlsMessage,
+  encodeMlsMessage,
+  makePskIndex,
+  processPrivateMessage,
+  type CiphersuiteImpl,
+} from 'ts-mls'
 import {
   Archive,
   MemoryStore,
@@ -450,6 +459,111 @@ describe('MlsCrypto', () => {
     })
   })
 
+  describe('what the author said', () => {
+    it('reads back its own message, which the ratchet alone cannot', async () => {
+      // The finding this block exists for. `createApplicationMessage` advances
+      // the sender's own ratchet past the generation it just used, so the author
+      // is the one member of the group for whom the message is already in the
+      // past — every other member reads it and its author gets `Desired gen in
+      // the past`. There is no key anybody could hand over; the deletion *is*
+      // the forward secrecy. So `seal()` remembers, and this is the assertion
+      // that it does.
+      const { ada } = await pair()
+      const event = await say(ada, 'deploying api 1.4.2')
+
+      assert.equal(await ada.crypto.open(event), 'deploying api 1.4.2')
+      assert.equal(ada.crypto.opener()(event)?.content, 'deploying api 1.4.2')
+      assert.equal(ada.crypto.unreadable(event), false)
+    })
+
+    it('files the signed envelope in the archive when the event comes back', async () => {
+      // `seal()` never sees a signature — the `Publisher` signs afterwards — so
+      // the record is completed on the way past `open()`. Without this the
+      // archive holds every message in the channel except the ones this client
+      // wrote, and `quorum export` a month later has a conversation with one
+      // side of it missing.
+      const { ada } = await pair()
+      const event = await say(ada, 'deploying api 1.4.2')
+      assert.equal(await ada.archive.get('ops', event.id), undefined)
+
+      await ada.crypto.open(event)
+      const held = await ada.archive.get('ops', event.id)
+      assert.equal(held?.plaintext, 'deploying api 1.4.2')
+      assert.equal(held?.event.sig, event.sig, 'the signature, which is what an auditor checks')
+    })
+
+    it('survives a restart before the event has ever come back off the relay', async () => {
+      // The crash window the envelope cache closes on the reading side too.
+      // Publish, die, restart: the archive has nothing, because the event has
+      // not been seen yet, and the ratchet has never been able to open it. The
+      // envelope cache is the only copy, and it was written before `publish()`
+      // was allowed to happen.
+      const { ada } = await pair()
+      const event = await say(ada, 'deploying api 1.4.2')
+
+      const restarted = await MlsCrypto.open({
+        store: ada.store,
+        pubkey: ADA,
+        group: 'ops',
+        ciphersuite: cs,
+        archive: ada.archive,
+        envelopes: ada.envelopes,
+      })
+      assert.equal(restarted.opener()(event), undefined, 'nothing is loaded until warm()')
+
+      assert.equal(await restarted.warm(), 1)
+      assert.equal(restarted.opener()(event)?.content, 'deploying api 1.4.2')
+    })
+
+    it('remembers nothing for an event it declined to seal', async () => {
+      // The control for `seal()`'s two early returns. A KeyPackage goes out in
+      // the clear on an `mls` channel by design, and an author that filed its
+      // own plaintext for one would be building a private record of events that
+      // were never private — harmless here, and the kind of thing that stops
+      // being harmless when the unsealed list grows.
+      const { ada } = await pair()
+      const bootstrap = sign(
+        build({
+          kind: 30443,
+          pubkey: ADA,
+          group: 'ops',
+          d: ADA,
+          text: base64.encode(Uint8Array.of(0, 1, 2)),
+          counter: 1,
+          created_at: NOW,
+          ...ada.crypto.buildOptions(30443),
+        }),
+      )
+      await ada.crypto.seal(bootstrap)
+
+      assert.equal((await ada.envelopes.spoken('ops')).size, 0)
+      assert.equal(ada.crypto.unreadable(bootstrap), false, 'because it is not sealed at all')
+    })
+
+    it('does not remember a retry twice or move the generation to do it', async () => {
+      // `seal()` writes to the map after `sealOnce`, so the cached path runs it
+      // too. That is deliberate — a restarted author replaying a `once()` retry
+      // needs the plaintext in memory as much as the first caller did — and this
+      // pins that it costs nothing: one envelope, one entry, one generation.
+      const { ada, bob } = await pair()
+      const draft = {
+        kind: BorrowedKinds.ChatMessage,
+        pubkey: ADA,
+        group: 'ops',
+        text: 'deploying api 1.4.2',
+        counter: 7,
+        created_at: NOW,
+        ...ada.crypto.buildOptions(BorrowedKinds.ChatMessage),
+      }
+      const first = sign(await ada.crypto.seal(build(draft)))
+      const retry = sign(await ada.crypto.seal(build(draft)))
+
+      assert.equal(retry.id, first.id)
+      assert.equal((await ada.envelopes.spoken('ops')).size, 1)
+      assert.equal(await bob.crypto.open(retry), 'deploying api 1.4.2')
+    })
+  })
+
   describe('opener()', () => {
     it('answers for what has been opened and stays silent about the rest', async () => {
       // Deliberately narrow. The verifiers that take this hook are synchronous
@@ -724,6 +838,33 @@ describe('the raw library, pinned', () => {
       envelopes: new SealedEnvelopes(new MemoryStore()),
     })
     await assert.rejects(() => fresh.open(event), /gen/i)
+  })
+
+  it('really does refuse to let a sender decrypt what it just sent', async () => {
+    // The control for the whole `what the author said` block, and the reason
+    // that block is not a convenience cache. Asserted against `ts-mls` directly
+    // so it is a claim about MLS rather than about this file: the sender's own
+    // ratchet is advanced by `createApplicationMessage`, so the generation the
+    // message was encrypted under is gone before anyone could ask for it back.
+    const identity = await mlsKeyPackage(ADA, cs)
+    const state = await createGroup(
+      utf8ToBytes('ops'),
+      identity.publicPackage,
+      identity.privatePackage,
+      [],
+      cs,
+    )
+    const { newState, privateMessage } = await createApplicationMessage(
+      state,
+      utf8ToBytes('mine'),
+      cs,
+      hexToBytes(ADA),
+    )
+
+    await assert.rejects(
+      () => processPrivateMessage(newState, privateMessage, makePskIndex(newState, {}), cs),
+      /gen/i,
+    )
   })
 
   it('carries the author in `authenticated_data`, readable without the group state', async () => {

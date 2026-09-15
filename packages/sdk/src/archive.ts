@@ -38,7 +38,7 @@
  */
 
 import type { NostrEvent, UnsignedEvent } from '@quorum/protocol'
-import { TagName, tagValue } from '@quorum/protocol'
+import { TagName, computeId, tagValue } from '@quorum/protocol'
 import type { Store } from './store.ts'
 
 const ARCHIVE = 'archive'
@@ -242,6 +242,16 @@ export class Archive {
  * the reason the counter rule gains a second reading — *same counter and same
  * plaintext* is a retry that lost its cache, *same counter and different
  * plaintext* is still "this key is in two places", which is the alarming one.
+ *
+ * It also holds the author's own plaintext, which is a second job and is here
+ * rather than in {@link Archive} because of when it is known. An MLS sender
+ * cannot decrypt what it sent: `createApplicationMessage` advances that member's
+ * own sender ratchet past the generation it just used, so feeding the message
+ * back gives "Desired gen in the past". Every other member can read it and the
+ * author cannot, permanently, and no key exists that would fix that. So the
+ * sentence is written down in the same awaited write as the envelope — the last
+ * moment it is legible to anybody holding it — and the {@link Archive} gets the
+ * signed copy later, when the event comes back off the relay.
  */
 export class SealedEnvelopes {
   private readonly store: Store
@@ -262,12 +272,23 @@ export class SealedEnvelopes {
    * neither is wrong and the type should not pretend otherwise.
    */
   async get<T extends UnsignedEvent = NostrEvent>(plaintextId: string): Promise<T | undefined> {
-    return this.store.get<T>(`${SEALED}:${plaintextId}`)
+    return (await this.store.get<SealedRecord<T>>(`${SEALED}:${plaintextId}`))?.sealed
   }
 
-  /** Record a sealed event against the id of the event it was sealed from. */
-  async put(plaintextId: string, sealed: UnsignedEvent): Promise<void> {
-    await this.store.set(`${SEALED}:${plaintextId}`, sealed)
+  /**
+   * Record a sealed event against the id of the event it was sealed from.
+   *
+   * `plaintext` is what the sealer will not be able to read back. Optional
+   * because `nip44` sealing is reversible by its own author and has nothing to
+   * remember, and because a caller sealing something it did not compose has
+   * nothing to offer.
+   */
+  async put(plaintextId: string, sealed: UnsignedEvent, plaintext?: string): Promise<void> {
+    await this.store.set(`${SEALED}:${plaintextId}`, {
+      sealed,
+      id: computeId(sealed),
+      ...(plaintext !== undefined ? { plaintext } : {}),
+    } satisfies SealedRecord)
   }
 
   /**
@@ -281,18 +302,53 @@ export class SealedEnvelopes {
   async sealOnce<T extends UnsignedEvent = NostrEvent>(
     plaintextId: string,
     seal: () => T | Promise<T>,
+    plaintext?: string,
   ): Promise<T> {
     const stored = await this.get<T>(plaintextId)
     if (stored) return stored
     const sealed = await seal()
-    await this.put(plaintextId, sealed)
+    await this.put(plaintextId, sealed, plaintext)
     return sealed
+  }
+
+  /**
+   * What this client has said in a channel, keyed by the id of the sealed event.
+   *
+   * The sealed id rather than the plaintext id, because that is the id the
+   * signed event carries and therefore the one every reader — the feed, the
+   * packer, `opener()` — will ask about. Scoped by `h` tag so a store shared
+   * between two channels does not hand one channel's outgoing half to the other.
+   */
+  async spoken(group: string): Promise<Map<string, string>> {
+    const out = new Map<string, string>()
+    for (const key of await this.store.keys(`${SEALED}:`)) {
+      const record = await this.store.get<SealedRecord>(key)
+      if (record?.plaintext === undefined) continue
+      if (tagValue(record.sealed.tags, TagName.Group) !== group) continue
+      out.set(record.id, record.plaintext)
+    }
+    return out
   }
 
   /** Forget one envelope. For tests and for a caller pruning a completed chain. */
   async forget(plaintextId: string): Promise<void> {
     await this.store.delete(`${SEALED}:${plaintextId}`)
   }
+}
+
+/** One cached envelope: the bytes to republish, their id, and what they say. */
+interface SealedRecord<T extends UnsignedEvent = UnsignedEvent> {
+  sealed: T
+  /**
+   * The id the signed event will carry.
+   *
+   * Stored rather than recomputed on every read of {@link SealedEnvelopes.spoken},
+   * and it is not a cache of a cheap hash: the signature is not part of the id,
+   * so this is the same id whether the envelope was kept signed or unsigned, and
+   * writing it down is what lets the record be looked up from either side.
+   */
+  id: string
+  plaintext?: string
 }
 
 /**
