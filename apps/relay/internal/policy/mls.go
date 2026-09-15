@@ -32,7 +32,8 @@ const (
 //
 //   - a KeyPackage lands in the slot that will retire it;
 //   - a Welcome names exactly one member, so the addressing filter finds it;
-//   - at most one commit per group per epoch, so members do not split.
+//   - at most one commit per group per epoch, so members do not split;
+//   - an `mls` channel policy states no epoch, because none of it could be true.
 //
 // Everything else — whether the ciphertext opens, whether the committer was in
 // the tree, whether the credential matches the pubkey — is checked by members,
@@ -199,6 +200,53 @@ func SerialiseCommits(store Lookup) func(context.Context, *nostr.Event) (bool, s
 			}
 		}
 		return false, ""
+	}
+}
+
+// RejectMlsPolicyEpoch refuses a kind 38107 that says `mls` and states an epoch.
+//
+// The rule is the spec's, under "An mls policy states no epoch": the MLS epoch
+// is a property of the ratchet, advanced by every commit any member makes, so a
+// number written into a policy event is stale the instant somebody adds a
+// member — and stale in the damaging direction, since a client that believes it
+// is sealing at the current epoch is sealing at one the group has left.
+//
+// # Why it is here rather than in the schema
+//
+// It is a cross-field rule — `epoch` is legal on a `nip44` policy and mandatory
+// there — and `z.toJSONSchema()` cannot express the dependency, so it lives in
+// `crossFieldIssues()` in TypeScript and is invisible to the committed schemas
+// this relay validates from. Found by act 1 of `examples/mls-channel/src/live.ts`,
+// which published one and watched it stored: every TypeScript client in the
+// repo refuses to parse that event, which is worse than either extreme. An
+// admin can brick a channel with a policy the relay accepts and no client will
+// read, and the symptom is a workspace that has no encryption policy at all.
+//
+// Same stance as ConfirmResourceNames and the UNSEALED_KINDS table: a rule that
+// exists in one language is a rule the other implementation does not have.
+func RejectMlsPolicyEpoch() func(context.Context, *nostr.Event) (bool, string) {
+	return func(ctx context.Context, event *nostr.Event) (reject bool, msg string) {
+		if event.Kind != KindChannelPolicy {
+			return false, ""
+		}
+		var body struct {
+			Enc   string `json:"enc"`
+			Epoch *int   `json:"epoch"`
+		}
+		// A body this relay cannot parse is not this check's business; the
+		// schema validator upstream has already refused it, and answering
+		// "reject" here would attribute that refusal to the wrong rule.
+		if json.Unmarshal([]byte(event.Content), &body) != nil {
+			return false, ""
+		}
+		if body.Enc != protocol.EncMls || body.Epoch == nil {
+			return false, ""
+		}
+		return true, fmt.Sprintf(
+			"invalid: an mls channel policy must not state an epoch, and this one says %d; "+
+				"the ratchet is the only thing that knows the epoch, and a commit from any member "+
+				"makes this number wrong",
+			*body.Epoch)
 	}
 }
 

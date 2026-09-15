@@ -155,6 +155,35 @@ func TestANip44ChannelStillCountsFromOne(t *testing.T) {
 	mustPublish(t, conn, alice, sealed(action(root.ID, nil), "1"))
 }
 
+func TestAnMlsPolicyMayNotStateAnEpoch(t *testing.T) {
+	// The cross-field rule the committed schemas cannot carry. `epoch` is legal
+	// on a `nip44` policy and mandatory there, so the dependency is on `enc`,
+	// and `z.toJSONSchema()` emits neither — which left the rule enforced in
+	// TypeScript only, and this relay storing an event every client in the repo
+	// refuses to parse. An admin could brick a channel with a policy that was
+	// accepted and unreadable, and the symptom is a channel that appears to
+	// have no encryption policy at all.
+	//
+	// Found by act 1 of examples/mls-channel/src/live.ts, not by a Go test,
+	// because both languages were asked the same question only once.
+	alice := newActor(t, "alice")
+	relay := start(t, alice.pubkey)
+	conn := relay.connect(t, alice)
+
+	createGroup(t, conn, alice)
+
+	if msg := publish(t, conn, alice, channelPolicy("mls", 3)); msg == "" {
+		t.Error("the relay stored an mls policy stating an epoch")
+	} else if !strings.Contains(msg, "must not state an epoch") {
+		t.Errorf("refused for the wrong reason: %s", msg)
+	}
+
+	// Two controls, one in each direction, or this passes against a relay that
+	// refuses every policy or every mls one.
+	mustPublish(t, conn, alice, channelPolicy("mls", 0))
+	encryptChannel(t, conn, alice, 4)
+}
+
 func TestAKeyPackageMustLandInTheSlotThatRetiresIt(t *testing.T) {
 	// A KeyPackage is single-use, and the only thing enforcing that is
 	// addressable replacement: the next 30443 this member publishes overwrites

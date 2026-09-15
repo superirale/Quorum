@@ -161,6 +161,28 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  examples/mls-channel:
+    dependencies:
+      '@quorum/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@quorum/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      ts-mls:
+        specifier: ^1.6.4
+        version: 1.6.4(@noble/ciphers@2.4.0)(@noble/curves@1.9.7)
+    devDependencies:
+      '@quorum/test-kit':
+        specifier: workspace:*
+        version: link:../../packages/test-kit
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.4
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   examples/runaway-agent:
     dependencies:
       '@quorum/protocol':

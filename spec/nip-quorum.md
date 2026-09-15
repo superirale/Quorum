@@ -1291,7 +1291,13 @@ gives a delivery service: store, route, order.
 
 - **Store.** The `enc=mls` tag is refused on a channel with no `mls` policy, and
   a kind that [must be sealed](#which-kinds-stay-in-the-clear) is refused in the
-  clear on one that has it — the same two rules as `nip44`, unchanged.
+  clear on one that has it — the same two rules as `nip44`, unchanged. A relay
+  MUST also refuse a 38107 that says `mls` and carries an `epoch`; see
+  [An mls policy states no epoch](#an-mls-policy-states-no-epoch). That rule is
+  cross-field, so it cannot be expressed in the JSON Schema a relay validates
+  from, and a relay that leaves it to its clients stores a policy event every
+  conforming client refuses to parse — which presents as a channel with no
+  policy at all.
 - **Route.** A 30443 whose `d` is not its `h`, and an 8111 addressed to more than
   one member, are both refused. Both are addressing failures that no other layer
   reports, because both produce a member in good standing who reads nothing.

@@ -35,6 +35,7 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | [`examples/auditor`](examples/auditor) | Not an agent: a reader catching a relay that withholds an event, and proving it to a stranger |
 | [`examples/runaway-agent`](examples/runaway-agent) | An agent nobody is watching, stopped by a budget; one somebody is, stopped by a button |
 | [`examples/sealed-channel`](examples/sealed-channel) | A channel the relay cannot read, and an honest account of what that costs |
+| [`examples/mls-channel`](examples/mls-channel) | A channel nobody can read twice: forward secrecy, and what it takes away |
 | `spike/` | Throwaway M0 ergonomics spike. Deleted once M1–M4 land. |
 
 ## Status
@@ -164,6 +165,7 @@ pnpm --filter @quorum/auditor demo           # a relay caught withholding, and t
 pnpm --filter @quorum/auditor verify         # the proof, checked by a program that trusts nothing
 pnpm --filter @quorum/runaway-agent demo     # an agent runs out of money; a human presses Stop
 pnpm --filter @quorum/sealed-channel demo    # the channel goes dark, and four things stop working
+pnpm --filter @quorum/mls-channel demo       # a member joins and gets no history; one misses a commit
 
 pnpm check                                   # 801 tests: protocol 206, test-kit 17, sdk 444, console 54, web 80
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
@@ -203,6 +205,14 @@ demo of encryption that only showed the encryption working would be advertising.
 re-readable line is that the bodies are gone and the graph is not: `nip44` hides payloads, not who
 talked to whom.
 
+The mls-channel demo subtracts from that subtraction, and what it takes away is not the relay's
+access but the channel's own memory. MLS deletes the material that opens a message as it is used,
+so a member who joins today reads none of yesterday, a member who restarts reads only what they
+wrote down, and a member who misses one commit goes dark until somebody re-adds them. The relay
+becomes the transport and each member becomes the record. Its last act is the tension the design
+could not dissolve: removing somebody from a channel is two acts — the relay's list and an MLS
+Remove commit — and this repo can perform one of them.
+
 The auditor is the odd one out: no agent, no model, nothing being asked of a human. A relay
 signs a commitment, hides an event, gets caught, and is then proven to have done it — followed by
 the four controls that keep it from crying wolf, because a mechanism that accuses an honest relay
@@ -228,6 +238,7 @@ pnpm --filter @quorum/runaway-agent live     # one fold in Go and TypeScript, an
 cd apps/relay && QUORUM_EVENTS_BURST=400 QUORUM_FILTERS_BURST=400 \
   QUORUM_CHECKPOINT_EVERY=5 QUORUM_CHECKPOINT_LAG=10 QUORUM_CLOCK_SKEW_SECONDS=10 make run
 pnpm --filter @quorum/sealed-channel live    # a plaintext group and an encrypted one, same relay
+pnpm --filter @quorum/mls-channel live       # the same pairing for mls, and two membership lists
 ```
 
 The sealed-channel run is paired throughout: every act does the same thing in a plaintext group
