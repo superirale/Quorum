@@ -1,6 +1,7 @@
 {
   "name": "quorum",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.25.0",
   "engines": { "node": ">=24" },
