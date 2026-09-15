@@ -19,10 +19,10 @@
  */
 
 import { useMemo, useState } from 'react'
-import { Kinds, type NostrEvent } from '@quorum/protocol'
+import { EncMode, Kinds, type NostrEvent } from '@quorum/protocol'
 import type { Thread } from '@quorum/sdk'
 import { short } from '../format.ts'
-import type { Workspace } from '../useWorkspace.ts'
+import { MLS_NO_KEY, type Workspace } from '../useWorkspace.ts'
 
 export function Composer({ workspace, thread }: { workspace: Workspace; thread?: Thread }) {
   const [text, setText] = useState('')
@@ -60,6 +60,19 @@ export function Composer({ workspace, thread }: { workspace: Workspace; thread?:
     } finally {
       setBusy(false)
     }
+  }
+
+  // No form at all, rather than a disabled one. A greyed-out box invites you to
+  // find the setting that re-enables it, and there isn't one: the reason is
+  // structural and lives in another program. `publish` refuses too — this is
+  // the explanation, not the enforcement.
+  if (workspace.policy.enc === EncMode.Mls) {
+    return (
+      <p className="composer locked warn">
+        {MLS_NO_KEY}. Say it from the console instead:{' '}
+        <code>quorum say "…" --to &lt;who&gt;</code>
+      </p>
+    )
   }
 
   return (

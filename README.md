@@ -165,7 +165,7 @@ pnpm --filter @quorum/auditor verify         # the proof, checked by a program t
 pnpm --filter @quorum/runaway-agent demo     # an agent runs out of money; a human presses Stop
 pnpm --filter @quorum/sealed-channel demo    # the channel goes dark, and four things stop working
 
-pnpm check                                   # 736 tests: protocol 206, test-kit 17, sdk 418, console 41, web 54
+pnpm check                                   # 792 tests: protocol 206, test-kit 17, sdk 435, console 54, web 80
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket

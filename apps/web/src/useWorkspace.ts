@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Kinds, type NostrEvent } from '@quorum/protocol'
+import { EncMode, Kinds, isMlsSealed, type NostrEvent } from '@quorum/protocol'
 import {
   ChannelCrypto,
   Counters,
@@ -23,6 +23,7 @@ import {
   Publisher,
   RelayClient,
   channelFilter,
+  channelPolicy,
   controlFilter,
   inbox,
   isKeyManagement,
@@ -60,7 +61,10 @@ export interface Workspace {
   events: NostrEvent[]
   /** The bytes the relay served, sealed. What a signature is over. */
   raw: NostrEvent[]
-  /** The channel's encryption state. `undefined` until the relay answers. */
+  /**
+   * The channel's encryption state. `undefined` until the relay answers — and
+   * on an `mls` channel, for as long as the tab is open. See {@link MLS_NO_KEY}.
+   */
   channel?: ChannelCrypto
   policy: ChannelPolicy
   /** True for an event sealed under an epoch this key does not hold. */
@@ -81,11 +85,25 @@ export interface Workspace {
   now: number
 }
 
+/**
+ * Why this client will not publish into an `mls` channel.
+ *
+ * Exported so the composer's refusal and the hook's are the same sentence, for
+ * the reason the console's `noKey` exists: two copies of "why can't I" drift,
+ * and the one that drifts is the one nobody reads until it is wrong.
+ */
+export const MLS_NO_KEY =
+  'this channel is sealed with MLS and this client holds no ratchet for it, so there is nothing ' +
+  'here to seal a message with'
+
 export function useWorkspace(identity: Identity, relay: string, group: string): Workspace {
   const [status, setStatus] = useState<Status>('connecting')
   const [problem, setProblem] = useState<string | undefined>()
   const [raw, setEvents] = useState<NostrEvent[]>([])
   const [channel, setChannel] = useState<ChannelCrypto | undefined>()
+  // Its own state rather than `channel.policy`, because on `mls` there is no
+  // `channel` and the policy is the only thing this client has.
+  const [policy, setPolicy] = useState<ChannelPolicy>(PLAINTEXT_POLICY)
   // Bumped whenever a key or a policy arrives. `ChannelCrypto` is mutable and
   // React cannot see into it, so without this a rotation would land, the events
   // would stay on screen as unreadable, and nothing would re-render to show
@@ -107,14 +125,39 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
     setProblem(undefined)
     setEvents([])
     setChannel(undefined)
+    setPolicy(PLAINTEXT_POLICY)
 
     const client = new RelayClient({ url: relay, signer: identity.signer })
-    const crypto = new ChannelCrypto({
-      client,
-      signer: identity.signer,
-      pubkey: identity.pubkey,
-      group,
-    })
+    // Built only once the policy has been read, and never on `mls`.
+    //
+    // A `ChannelCrypto` over an mls channel is not merely idle — it is wrong in
+    // the expensive direction. `encrypted` is false there, so `buildOptions`
+    // returns nothing and the composer publishes in the clear into a channel
+    // whose policy says otherwise; and `unreadable()` answers true for every
+    // message, which this app renders as "ask an admin to wrap the current
+    // epoch". That is the nip44 cure, and on mls there is no admin who can
+    // perform it: the keys are deleted by design.
+    let crypto: ChannelCrypto | undefined
+
+    // Re-read after any key management, on either path. On `nip44` this is a
+    // wrap arriving or a rotation; on `mls` the only thing that can change is
+    // the policy itself, and a client that missed the channel leaving mls would
+    // go on refusing a channel that reopened.
+    const reload = async () => {
+      if (crypto) {
+        await crypto.load()
+        if (!live) return
+        setPolicy(crypto.policy)
+        setRekeys((n) => n + 1)
+        return
+      }
+      const next = await channelPolicy(client, group)
+      if (!live) return
+      setPolicy(next)
+      if (next.enc !== EncMode.Mls) {
+        setProblem(`#${group} is no longer an mls channel — reload to pick up its keys`)
+      }
+    }
 
     const add = (event: NostrEvent) => {
       if (!live) return
@@ -122,8 +165,14 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
       // it changes what the views can read. Reloading before the event is added
       // means one render, with the new key already in hand.
       if (isKeyManagement(event.kind)) {
-        void crypto.load().then(() => {
-          if (live) setRekeys((n) => n + 1)
+        // Caught, and the reason is teardown rather than tidiness: closing the
+        // client rejects every query in flight with "client closed", and a tab
+        // being closed while a wrap arrives must not surface as an unhandled
+        // rejection. If we are still live the re-read genuinely failed, and
+        // this client is now reading the channel through a stale key set —
+        // which is worth saying rather than swallowing.
+        void reload().catch((error: Error) => {
+          if (live) setProblem(`could not re-read the channel's keys: ${error.message}`)
         })
         return
       }
@@ -135,26 +184,46 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
         await client.connect()
         if (!live) return
 
+        // The policy first, because it decides whether there is anything to
+        // build. Reading it costs one query that `ChannelCrypto.load()` would
+        // have made anyway.
+        const current = await channelPolicy(client, group)
+        if (!live) return
+        setPolicy(current)
+
         // Before the publisher, deliberately. A `Publisher` built without the
         // channel writes plaintext into an encrypted channel and nothing
         // complains: the relay stores it, every reader renders it, and the
         // channel is quietly less private than its own policy says.
-        await crypto.load()
-        if (!live) return
-        setChannel(crypto)
-        setRekeys((n) => n + 1)
+        //
+        // On `mls` there is no publisher at all, for the same reason stated the
+        // other way round: there is nothing this client could seal *with*, so
+        // the only event it could produce is the one the policy forbids.
+        if (current.enc !== EncMode.Mls) {
+          crypto = new ChannelCrypto({
+            client,
+            signer: identity.signer,
+            pubkey: identity.pubkey,
+            group,
+          })
+          await crypto.load()
+          if (!live) return
+          setChannel(crypto)
+          setPolicy(crypto.policy)
+          setRekeys((n) => n + 1)
 
-        publisher.current = new Publisher({
-          client,
-          signer: identity.signer,
-          pubkey: identity.pubkey,
-          group,
-          channel: crypto,
-          counters: await Counters.load(
-            new LocalStore(`quorum.counters.${identity.pubkey.slice(0, 8)}.`),
-            identity.pubkey,
-          ),
-        })
+          publisher.current = new Publisher({
+            client,
+            signer: identity.signer,
+            pubkey: identity.pubkey,
+            group,
+            channel: crypto,
+            counters: await Counters.load(
+              new LocalStore(`quorum.counters.${identity.pubkey.slice(0, 8)}.`),
+              identity.pubkey,
+            ),
+          })
+        }
 
         client.subscribe(
           [
@@ -190,10 +259,17 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
     }
   }, [identity.signer, identity.pubkey, relay, group])
 
-  const publish = useCallback(async (options: PublishOptions) => {
-    if (!publisher.current) throw new Error('not connected to the relay yet')
-    return publisher.current.publish(options)
-  }, [])
+  // The mls check is here as well as in the composer, and not only for tidiness:
+  // a channel can turn mls while a form is already on the screen, and the send
+  // button that was legitimate when it rendered must not publish in the clear.
+  const publish = useCallback(
+    async (options: PublishOptions) => {
+      if (policy.enc === EncMode.Mls) throw new Error(MLS_NO_KEY)
+      if (!publisher.current) throw new Error('not connected to the relay yet')
+      return publisher.current.publish(options)
+    },
+    [policy.enc],
+  )
 
   // Opened once, here, and read by everything below.
   //
@@ -251,14 +327,16 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
   // "There is traffic here I cannot read" is a different fact from "the channel
   // is quiet", and on an encrypted channel it is the one that matters: it is
   // what being locked out of an epoch looks like from the inside.
+  //
+  // With no `channel` the test is the event's own `enc` tag, which is the only
+  // thing left to ask. It is also the honest answer: an mls event is unreadable
+  // here whatever the policy currently says, because this client never held a
+  // ratchet for any epoch of it.
   const sealed = useCallback(
-    (event: NostrEvent) => channel?.unreadable(event) ?? false,
+    (event: NostrEvent) => channel?.unreadable(event) ?? isMlsSealed(event),
     [channel, rekeys],
   )
-  const unreadable = useMemo(
-    () => (channel ? raw.filter((e) => channel.unreadable(e)).length : 0),
-    [raw, channel, rekeys],
-  )
+  const unreadable = useMemo(() => raw.filter(sealed).length, [raw, sealed])
 
   return {
     status,
@@ -266,7 +344,7 @@ export function useWorkspace(identity: Identity, relay: string, group: string): 
     events,
     raw,
     channel,
-    policy: channel?.policy ?? PLAINTEXT_POLICY,
+    policy,
     sealed,
     unreadable,
     pending,

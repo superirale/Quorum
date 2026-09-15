@@ -12,7 +12,7 @@
  * did so without knowing what it was.
  */
 
-import type { NostrEvent } from '@quorum/protocol'
+import { isMlsSealed, type NostrEvent } from '@quorum/protocol'
 import { describe, hue, short, when } from '../format.ts'
 
 export function Feed({
@@ -38,6 +38,13 @@ export function Feed({
         // the strongest demonstration this app has of why the spec requires it
         // on every kind: a reader with no key at all still gets a sentence.
         const locked = sealed?.(event) ?? false
+        // Two locks, and the difference is whether anything can be done. A
+        // nip44 event is waiting for a wrap somebody can still send; an mls one
+        // is waiting for nothing, because the epoch secrets that opened it were
+        // deleted by every member as the group moved on.
+        const why = isMlsSealed(event)
+          ? 'sealed to an MLS epoch — this client holds no ratchet, and this message will not become readable here'
+          : 'sealed under a key you do not hold'
         return (
           <li key={event.id} className={event.pubkey === me ? 'mine' : undefined}>
             <span className="kind">{event.kind}</span>
@@ -45,7 +52,7 @@ export function Feed({
               {short(event.pubkey)}
             </span>
             <span className={locked ? 'text locked' : 'text'}>
-              {locked && <span title="sealed under a key you do not hold">🔒 </span>}
+              {locked && <span title={why}>🔒 </span>}
               {describe(event)}
             </span>
             <span className="at dim">{when(event.created_at)}</span>

@@ -18,6 +18,7 @@ import { Approvals } from './components/Approvals.tsx'
 import { AuthPrompt } from './components/AuthPrompt.tsx'
 import { Chains } from './components/Chains.tsx'
 import { Composer } from './components/Composer.tsx'
+import { ModeBadge, Unreadable } from './components/Encryption.tsx'
 import { Feed } from './components/Feed.tsx'
 import { Grants } from './components/Grants.tsx'
 import { Setup } from './components/Setup.tsx'
@@ -143,15 +144,7 @@ function Connected({
           <strong>#{settings.group}</strong>{' '}
           <span className={`status ${workspace.status}`}>{workspace.status}</span>
           <span className="dim"> · {settings.relay}</span>{' '}
-          {/* Not decoration. Which mode the channel is in decides whether the
-              relay can read what you are about to type, and it is a property of
-              the channel rather than of this client — so it is read off the
-              policy the relay serves, never assumed. */}
-          <span className={workspace.policy.enc === 'nip44' ? 'sealed' : 'dim'}>
-            {workspace.policy.enc === 'nip44'
-              ? `sealed · epoch ${workspace.policy.epoch ?? '?'}`
-              : 'plaintext'}
-          </span>
+          <ModeBadge policy={workspace.policy} />
         </div>
         <Agents agents={workspace.agents} now={workspace.now} />
         <div>
@@ -168,18 +161,11 @@ function Connected({
         </div>
       </header>
 
-      {workspace.unreadable > 0 && (
-        <div className="banner warn">
-          {workspace.unreadable} event(s) here are sealed under a key this identity does not
-          hold.
-          <div className="dim">
-            They are listed in the channel and cannot be read, and nothing derived from them —
-            approvals, tasks, capabilities — can appear. Ask an admin to wrap the current epoch
-            for {short(identity.pubkey)}. Rotating a key does not re-wrap history for you
-            automatically.
-          </div>
-        </div>
-      )}
+      <Unreadable
+        count={workspace.unreadable}
+        policy={workspace.policy}
+        me={identity.pubkey}
+      />
 
       {workspace.problem && (
         <div className="banner error">

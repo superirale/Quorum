@@ -1,7 +1,7 @@
 {
   "name": "@quorum/web",
   "version": "0.1.0",
-  "description": "Quorum: the reference client — the approvals queue a human actually sits in front of",
+  "description": "Quorum: the reference client \u2014 the approvals queue a human actually sits in front of",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -11,9 +11,9 @@
     "prebuild": "pnpm --filter @quorum/sdk build",
     "build": "vite build",
     "preview": "vite preview",
-    "pretest": "pnpm --filter @quorum/sdk build",
+    "pretest": "pnpm --filter @quorum/sdk build && pnpm --filter @quorum/test-kit build",
     "test": "vitest run",
-    "pretypecheck": "pnpm --filter @quorum/sdk build",
+    "pretypecheck": "pnpm --filter @quorum/sdk build && pnpm --filter @quorum/test-kit build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -23,15 +23,18 @@
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@quorum/test-kit": "workspace:*",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^5.0.0",
     "jsdom": "^30.0.1",
     "typescript": "^5.9.0",
     "vite": "^7.1.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "ws": "^8.18.0"
   }
 }
