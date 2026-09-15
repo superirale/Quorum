@@ -62,7 +62,10 @@ That matters more here than it looks. A runaway agent trips the rate limit long
 before it trips its thread budget: both are backstops from the same paragraph of
 the plan, and the cheaper one fires first. That is the right order in production
 and the wrong one for `examples/runaway-agent`, which documents the settings it
-needs to get past it.
+needs to get past it. `@quorum/conformance` needs the same thing for a worse
+reason: it publishes a few hundred events in six seconds, and a refusal it did
+not expect is recorded as this relay failing a MUST. CI runs it with both
+limiters at `0`.
 
 The relay's key is its identity. It signs the NIP-29 group metadata clients
 trust and the checkpoints that make withholding an event provable.

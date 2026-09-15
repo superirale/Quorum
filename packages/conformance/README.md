@@ -26,6 +26,27 @@ conformant for any + quorum
 A whole run takes about six seconds. It is safe to run against a live relay: it creates its own
 workspace, publishes only into that, and never deletes anything.
 
+## Turn the relay's rate limiter off first
+
+A few hundred events in six seconds is a burst by construction, and the reference relay's
+default is 40. So a run against a relay with `QUORUM_EVENTS_PER_MINUTE` at its default gets part
+way through and then starts being refused — and the suite records the refusals as MUST failures,
+because from out here `rate-limited: slow down, please` and "this relay rejects a valid grant"
+are the same observation. A default `apps/relay` produces five MUST failures and twenty-two
+checks the run never gets to ask, which is precisely the false accusation everything else in this
+tool is arranged to avoid, arriving through the relay's configuration instead of through a bug.
+
+```sh
+QUORUM_EVENTS_PER_MINUTE=0 QUORUM_FILTERS_PER_MINUTE=0 ./bin/quorum-relay
+```
+
+Nothing is lost by turning it off for the run: no check in this suite is about rate limits.
+Against somebody else's relay you cannot turn it off, so ask them to allow-list the owner key the
+run prints on stderr — that is the other reason it prints it.
+
+Raising `QUORUM_EVENTS_PER_MINUTE` without touching `QUORUM_EVENTS_BURST` does nothing at all;
+the burst is the real limit. See **Rate limits** in `apps/relay/README.md`.
+
 ## There is no score, and that is the design
 
 Quorum's central claim is **Option A**: every Quorum event is valid on any generic relay. So a

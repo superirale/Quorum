@@ -1,0 +1,156 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer uninteresting.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: typescript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # typecheck (src and tests, per package) then the whole test suite.
+      - run: pnpm check
+
+      # The SDK's root entry has to stay isomorphic: `node:fs` and `node:crypto`
+      # belong behind @quorum/sdk/node, and a bundler is the only thing that
+      # notices when they do not.
+      - run: pnpm --filter @quorum/web build
+
+  schemas:
+    name: schemas match the validators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # schemas/ is generated from the Zod validators and committed, because the
+      # Go relay and scripts/validate.py read it rather than importing src/. A
+      # committed schema that no longer matches the validator it came from is
+      # the drift this repo has found four times, so regenerate and insist on
+      # no diff.
+      - name: Regenerate and diff
+        run: |
+          pnpm schemas
+          git diff --exit-code -- packages/protocol/schemas
+
+      # A second language reading the committed schemas, with no dependency on
+      # any of the above: the standard library validates the golden transcript,
+      # then --self-test tampers eight ways and requires every one rejected.
+      - run: pnpm --filter @quorum/protocol test:python
+
+  relay:
+    name: relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/relay/go.mod
+          cache-dependency-path: apps/relay/go.sum
+
+      # gofmt, go vet, go test.
+      - run: make lint test
+        working-directory: apps/relay
+
+      # Scoped to ./internal/... deliberately: khatru's notifyListeners reads
+      # rl.listeners unlocked, which is upstream and still present on main.
+      - run: make race
+        working-directory: apps/relay
+
+  conformance:
+    name: conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/relay/go.mod
+          cache-dependency-path: apps/relay/go.sum
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: make build
+        working-directory: apps/relay
+
+      # QUORUM_*_PER_MINUTE=0 disables the per-IP limiter, and the suite does
+      # not work without it: it publishes about a hundred events in six seconds
+      # against a default burst of 40, so the relay starts refusing correct
+      # traffic part way through and the suite records five MUST failures
+      # against a relay that is behaving exactly as configured. Nothing is lost
+      # by turning it off, because no check in the suite is about rate limits.
+      - name: Start the reference relay
+        working-directory: apps/relay
+        run: |
+          QUORUM_ADDR=:3334 \
+          QUORUM_DOMAIN=localhost:3334 \
+          QUORUM_DATA_DIR="$RUNNER_TEMP/relay-data" \
+          QUORUM_EVENTS_PER_MINUTE=0 \
+          QUORUM_FILTERS_PER_MINUTE=0 \
+            ./bin/quorum-relay < /dev/null > "$RUNNER_TEMP/relay.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -sf -H 'Accept: application/nostr+json' http://localhost:3334/ > /dev/null; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "the relay never answered its NIP-11 document"
+          cat "$RUNNER_TEMP/relay.log"
+          exit 1
+
+      # --silent, or pnpm's own banner lands on stdout and the JSON report is
+      # not a document. Exit 1 is a MUST failure; exit 2 is the run not having
+      # happened, which the gate below distinguishes from a bad relay.
+      - name: Run the suite
+        run: |
+          pnpm --silent --filter @quorum/conformance start \
+            ws://localhost:3334 --json > "$RUNNER_TEMP/report.json"
+
+      # Exit 0 already means no MUST failed. The gate adds the two things an
+      # exit code cannot say: that no check was skipped, and that the SHOULDs
+      # this relay is known to fail are exactly the ones it still fails.
+      - name: Gate the report
+        if: always()
+        run: node .github/scripts/conformance-gate.mjs "$RUNNER_TEMP/report.json"
+
+      - name: Relay log
+        if: always()
+        run: cat "$RUNNER_TEMP/relay.log"

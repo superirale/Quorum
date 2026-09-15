@@ -1,0 +1,40 @@
+name: kind registry
+
+# Deliberately not part of `check`. The kind numbers in the 8100/28100/38100
+# ranges are provisional until the NIP PR merges, and what this asks is whether
+# somebody *else* has claimed one since the last run — a question about three
+# repositories nobody here controls. Gating a pull request on that would mean a
+# stranger's commit turning this repo red, and a stranger's outage turning it
+# red for no reason at all. So: weekly, and on demand.
+#
+# A clash is a MAJOR version bump under spec/VERSIONING.md, and the sooner it
+# is known the cheaper the reallocation is.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-registry:
+    name: kinds are still unclaimed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Exit 1 is a clash; exit 2 is a source that could not be read, which on
+      # a shared runner IP is usually api.github.com's unauthenticated limit
+      # rather than anything about the kinds. The script says which.
+      - run: pnpm --filter @quorum/protocol check-registry
