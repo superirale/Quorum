@@ -28,7 +28,12 @@ export async function audit(args: ParsedArgs): Promise<void> {
     // against the bytes the author signed, and on an encrypted channel those
     // bytes are the ciphertext — so the auditor opens after verifying rather
     // than being handed events that were opened first.
-    const chains = verifyActionChains(scoped, { open: opener(session) })
+    // Awaited because on `mls` the opener is only as good as what the ratchet
+    // has already been through, and `opener()` warms it. A sync one here would
+    // verify every signature correctly and report every sealed body as absent —
+    // which reads as "nothing was proposed", not as "this console cannot read
+    // the channel".
+    const chains = verifyActionChains(scoped, { open: await opener(session) })
     if (!chains.length) {
       console.log(dim(`no action chains in #${session.config.group} — nothing was proposed`))
       return

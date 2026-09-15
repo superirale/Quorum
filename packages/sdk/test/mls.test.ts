@@ -39,6 +39,7 @@ import {
   credentialPubkey,
   mlsCiphersuite,
   mlsKeyPackage,
+  openReadableMls,
   type MlsIdentity,
   type PublishCommit,
   type Store,
@@ -739,5 +740,87 @@ describe('the raw library, pinned', () => {
       Buffer.from(message.privateMessage.authenticatedData).toString('hex'),
       event.pubkey,
     )
+  })
+})
+
+describe('openReadableMls', () => {
+  it('opens what it can and hands back everything else untouched', async () => {
+    // Unreadable events stay in the list rather than being filtered out, and
+    // that is the same rule the archive follows: a reader shown only what it
+    // could decrypt sees a complete-looking conversation with the gaps closed
+    // up, which is a worse lie than a line it cannot read.
+    const { ada, bob } = await pair()
+    const mine = await say(ada, 'ship it')
+    const stranger = { ...mine, id: 'd'.repeat(64), content: base64.encode(new Uint8Array([1, 2, 3])) }
+
+    let missing = 0
+    const opened = await openReadableMls(bob.crypto, [mine, stranger], (n) => (missing = n))
+
+    assert.equal(opened.length, 1, 'an event it cannot read contributes nothing to open')
+    assert.equal(opened[0]?.content, 'ship it')
+    assert.equal(missing, 1)
+  })
+
+  it('does not call back at all when it read everything', async () => {
+    // The banner this drives says "there is traffic here you cannot read".
+    // Firing it with a count of zero on a channel the reader is fully caught up
+    // on is how a UI teaches its operator to ignore it.
+    const { ada, bob } = await pair()
+    let called = 0
+    await openReadableMls(bob.crypto, [await say(ada, 'one')], () => (called += 1))
+    assert.equal(called, 0)
+  })
+
+  it('leaves an unsealed event alone rather than counting it as unreadable', async () => {
+    // Key material, policies and commits travel unsealed by design on an `mls`
+    // channel, and they are the majority of what a command like `quorum audit`
+    // reads. Counting them as missing would report a channel full of holes and
+    // point at forward secrecy, which is not what happened.
+    const { ada, bob } = await pair()
+    const policy = sign(
+      build({ kind: BorrowedKinds.ChatMessage, pubkey: ADA, group: 'ops', text: 'in the clear', created_at: NOW }),
+    )
+    let missing = 0
+    const opened = await openReadableMls(bob.crypto, [policy], (n) => (missing = n))
+    assert.equal(opened[0]?.content, 'in the clear')
+    assert.equal(missing, 0)
+  })
+
+  it('reads a second pass out of the archive rather than spending a generation twice', async () => {
+    // The reason this exists instead of a loop over `ratchetOpen`. A console
+    // command that calls `readableEvents()` twice — `audit` warms the opener and
+    // then verifies — must not turn the second read into a channel that has gone
+    // dark. Asserted by reading the same set twice and requiring the same answer.
+    const { ada, bob } = await pair()
+    const events = [await say(ada, 'first', { counter: 1 }), await say(ada, 'second', { counter: 2 })]
+
+    const once = await openReadableMls(bob.crypto, events)
+    let missing = 0
+    const twice = await openReadableMls(bob.crypto, events, (n) => (missing = n))
+
+    assert.deepEqual(
+      twice.map((e) => e.content),
+      once.map((e) => e.content),
+    )
+    assert.deepEqual(once.map((e) => e.content), ['first', 'second'])
+    assert.equal(missing, 0, 'the second read must not report the channel as unreadable')
+  })
+
+  it('reports one count for many failures rather than one callback each', async () => {
+    // A per-event warning on a client that joined a busy channel yesterday is
+    // several thousand lines saying the same thing, which is indistinguishable
+    // from an outage. One line with a number is the whole point.
+    const { ada, bob } = await pair()
+    const real = await say(ada, 'this one is fine')
+    const junk = [1, 2, 3].map((n) => ({
+      ...real,
+      id: String(n).repeat(64),
+      content: base64.encode(new Uint8Array([n, n, n])),
+    }))
+
+    const calls: number[] = []
+    const opened = await openReadableMls(bob.crypto, junk, (n) => calls.push(n))
+    assert.equal(opened.length, 0)
+    assert.deepEqual(calls, [3], 'one callback, carrying the total')
   })
 })

@@ -26,6 +26,7 @@ import { channel } from './commands/channel.ts'
 import { grantCommand, grantsCommand, revokeCommand } from './commands/grants.ts'
 import { keygen, use, whoami } from './commands/identity.ts'
 import { say, watch } from './commands/messages.ts'
+import { mls } from './commands/mls.ts'
 import { budget, stop, tasks } from './commands/tasks.ts'
 import { workspace } from './commands/workspace.ts'
 import { bold, dim, red } from './format.ts'
@@ -37,6 +38,7 @@ const COMMANDS: Record<string, (args: ParsedArgs) => Promise<void>> = {
   bunker,
   workspace,
   channel,
+  mls,
   grant: grantCommand,
   revoke: revokeCommand,
   grants: grantsCommand,
@@ -119,6 +121,14 @@ ${bold('encryption')}
   channel key <who>          hand a member an epoch they are missing
       --epoch <n> | --all    default: the one being written now
   channel plaintext --confirm  turn it off ${dim('(history stays sealed; new messages do not)')}
+  channel encrypt --mls      turn mls on instead ${dim('(creates the group; no epoch in the policy)')}
+
+${bold('mls')} ${dim('— membership is the ratchet tree, not the relay member list')}
+  mls members                both lists, and where they disagree
+  mls keypackage             offer a way in ${dim('(then wait; nothing tells you when)')}
+  mls invite <who>...        commit the Add and hand out the Welcomes
+  mls join                   open a Welcome addressed to this identity
+  mls catchup                apply commits this member missed ${dim('(run it after every invite)')}
 
 ${bold('capabilities')}
   grant <who> <resource>     issue a capability

@@ -713,6 +713,47 @@ export class MlsCrypto implements ChannelSealer {
 }
 
 /**
+ * `openReadable`'s counterpart for a ratchet, and the name says which one
+ * you are calling on purpose.
+ *
+ * Three differences from the `nip44` version, and each is why this is a second
+ * function rather than an overload. It is asynchronous, because a ratchet step
+ * is. It opens *through* {@link MlsCrypto.open}, so the archive is consulted
+ * first and every message costs at most one generation however many times a
+ * command re-reads the channel — calling `ratchetOpen` twice for one event is
+ * the mistake a shared interface makes easy. And what it cannot read it reports
+ * by count rather than by throwing, because on an `mls` channel unreadable
+ * history is the *expected* state of any client that was not present at the
+ * time: forward secrecy means the keys are gone, for everybody, permanently.
+ *
+ * That last point is the one worth saying out loud in a UI. Under `nip44` a
+ * missing epoch means somebody forgot to wrap a key and the fix is
+ * `channel key <who>`. Here there is no fix, and a caller that renders the two
+ * the same way sends an operator looking for a switch that does not exist.
+ */
+export async function openReadableMls(
+  crypto: MlsCrypto,
+  events: readonly NostrEvent[],
+  onMissing?: (missing: number) => void,
+): Promise<NostrEvent[]> {
+  const opened: NostrEvent[] = []
+  let missing = 0
+  for (const event of events) {
+    try {
+      opened.push({ ...event, content: await crypto.open(event) })
+    } catch {
+      // Deliberately every error, not a named class. `open()` fails with
+      // whatever `ts-mls` threw — an HPKE `OperationError`, a binding refusal,
+      // a generation already spent — and none of those distinctions change what
+      // a reader can do about this event, which is nothing.
+      missing += 1
+    }
+  }
+  if (missing) onMissing?.(missing)
+  return opened
+}
+
+/**
  * An MLS epoch is a `uint64` and the `epoch` tag is a JSON number.
  *
  * Refused rather than rounded above 2^53. A group would need nine quadrillion
