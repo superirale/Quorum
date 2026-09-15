@@ -1770,6 +1770,11 @@ encrypted Quorum channel as metadata-private.
   repurposing a kind, adding a required field, or changing a tag's meaning is
   MAJOR.
 
+The policy those two paragraphs summarise is written out in `VERSIONING.md`,
+beside this document, and every change made under it is recorded in
+`CHANGELOG.md`. A MAJOR bump requires a migration note saying what a reader that
+does nothing will see.
+
 ## Reference implementation
 
 `@quorum/protocol` — kind and tag definitions, validators, and JSON Schema for
@@ -1783,6 +1788,14 @@ A signed golden transcript of the full loop — request, proposal, approval,
 execution — is committed at `fixtures/deploy-approval.json`, and
 `scripts/validate.py` validates it using only the standard library and the
 committed schemas.
+
+`@quorum/conformance` is a runnable suite — `npx @quorum/conformance <relay-url>`
+— that publishes an honest event of every kind at a relay, breaks one thing at a
+time, and reports section by section in the relay's own words. It groups its
+results by profile rather than scoring them, because a generic relay that
+implements none of this NIP still satisfies the claim the NIP rests on: every
+event defined here is valid on any relay. The `quorum` profile is detected by
+probe, not assumed.
 
 `apps/relay` is a reference relay in Go (khatru + relay29) which reads those
 schemas as data — it could not import the TypeScript validators if it wanted to,

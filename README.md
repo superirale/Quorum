@@ -23,9 +23,11 @@ Agents run as external processes. Nothing in this system runs an LLM loop.
 | | |
 | --- | --- |
 | [`spec/nip-quorum.md`](spec/nip-quorum.md) | The NIP text — kinds, tags, and why each rule exists |
+| [`spec/CHANGELOG.md`](spec/CHANGELOG.md) | What has changed in it, and [the policy](spec/VERSIONING.md) saying which changes break a reader |
 | [`packages/protocol`](packages/protocol) | Kind allocation, validators, JSON Schema, fixtures |
 | [`packages/sdk`](packages/sdk) | Agent SDK — signers, client, addressing, `once()`, replay, leases, context packing |
 | [`packages/test-kit`](packages/test-kit) | In-process relay + chaos helpers, so agents are testable with no infra |
+| [`packages/conformance`](packages/conformance) | `npx @quorum/conformance <relay-url>` — a runnable suite any relay can be held to |
 | [`apps/relay`](apps/relay) | Reference relay — khatru + relay29 + the Quorum policies (Go) |
 | [`apps/console`](apps/console) | `quorum` — the operator CLI: be the human in the loop from a terminal |
 | [`apps/web`](apps/web) | Reference client (React) — the approvals queue, with the payload editable field by field |
@@ -150,7 +152,38 @@ nowhere — and it aborts the `AbortSignal` the running effect is holding. The c
 people to different screens. There is no receipt and there cannot be one, so every Stop button
 in this repository says so on the screen rather than in the docs.
 
-Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges.
+**M9** — `nip44` channels: a signed per-channel policy, a shared channel key in epochs, and a
+relay that can still route, rate-limit and checkpoint a conversation it cannot read a word of.
+Most of this milestone is subtraction, and the honest part is saying what it subtracts. The
+relay stops folding tasks, stops packing context and stops enforcing approvals; a keyless
+auditor reports `sealed` rather than a verdict; and the graph — who talked to whom, and when —
+stays in the clear, because hiding it costs the addressing every other control is built on.
+NIP-46 landed here too, so an operator's key need never reach the console or the browser.
+
+**M10** — `mls` channels, and the cost written on the tin. The envelope stays Quorum's, so
+addressing, rate limiting and the checkpoint anchor survive; what MLS takes is the channel's own
+memory. Forward secrecy deletes the material that opens a message as it is used, so replay,
+backfill, context packing and the audit all stop working against the relay's copy — the relay is
+the transport and each member is the record. The reference client refuses to join one and
+explains why, which is a `d`-tag consequence rather than a missing feature: one KeyPackage slot
+per key per channel means a tab and a console held by the same human cannot both be in the
+ratchet. Two gaps are stated rather than closed — there is no MLS Remove, and no `createAgent`
+path builds an `MlsCrypto`.
+
+**M11** — the conformance suite ([`packages/conformance`](packages/conformance)), and the spec
+packaged for submission. `npx @quorum/conformance <relay-url>` publishes a few hundred events at
+a relay, breaks one thing at a time, and reports section by section in the relay's own words.
+There is deliberately no score: under Option A a generic relay that has never heard of Quorum
+passes the claim that matters and fails every policy check, so results are grouped by profile —
+and `quorum` is *detected* with a probe rather than assumed, so a plain relay reads as "not
+applicable, with the reason" instead of forty red crosses. The suite's own rule is that an
+exception is never a failure: a question it could not ask is a `skip` counted in the footer,
+because the one mistake a conformance tool must never make is reporting its own bug as somebody
+else's non-conformance.
+
+Kind numbers in the 8100 / 28100 / 38100 ranges are provisional until the NIP PR merges. What
+would change if one moves, and what would not, is written down in
+[`spec/VERSIONING.md`](spec/VERSIONING.md).
 
 ## Try it
 
@@ -167,7 +200,7 @@ pnpm --filter @quorum/runaway-agent demo     # an agent runs out of money; a hum
 pnpm --filter @quorum/sealed-channel demo    # the channel goes dark, and four things stop working
 pnpm --filter @quorum/mls-channel demo       # a member joins and gets no history; one misses a commit
 
-pnpm check                                   # 801 tests: protocol 206, test-kit 17, sdk 444, console 54, web 80
+pnpm check                                   # 823 tests: protocol 217, test-kit 17, sdk 444, console 54, web 80, conformance 11
 pnpm --filter @quorum/protocol test:python   # cross-language validation + tamper self-test
 
 cd apps/relay && make test                   # the relay, end to end over a real websocket
@@ -239,7 +272,17 @@ cd apps/relay && QUORUM_EVENTS_BURST=400 QUORUM_FILTERS_BURST=400 \
   QUORUM_CHECKPOINT_EVERY=5 QUORUM_CHECKPOINT_LAG=10 QUORUM_CLOCK_SKEW_SECONDS=10 make run
 pnpm --filter @quorum/sealed-channel live    # a plaintext group and an encrypted one, same relay
 pnpm --filter @quorum/mls-channel live       # the same pairing for mls, and two membership lists
+
+pnpm --filter @quorum/conformance start ws://localhost:3334   # or npx @quorum/conformance
 ```
+
+The conformance run is the one you can point at somebody else's relay. It takes about six
+seconds, creates its own workspace, and deletes nothing. Against `apps/relay` it reports 87 MUST
+checks passed and one SHOULD failed — `interop/keeps-deletions`, which is khatru v0.17.7 routing
+kind 5 past the storage path, documented under **Known gaps** in
+[`apps/relay/README.md`](apps/relay/README.md). The four checkpoint checks need a workspace with
+history behind it, which is a second run; [the package README](packages/conformance) has the
+recipe.
 
 The sealed-channel run is paired throughout: every act does the same thing in a plaintext group
 and in an encrypted one against one relay in one run, because a claim about what a relay stops

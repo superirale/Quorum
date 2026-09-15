@@ -565,6 +565,19 @@ matched nothing. Read `Subscription.ClosedReason`.
   checkpoint from then on, and there is no way to distinguish that from
   withholding by looking at the events. Retention policy and checkpoints are in
   tension and the relay currently just lets them be.
+- **A NIP-09 deletion request is acted on and then dropped**, and this is the one
+  SHOULD the conformance suite reports this relay failing. khatru special-cases
+  kind 5 in its message loop — `handlers.go:215-221` calls `handleDeleteRequest`
+  instead of `AddEvent` — so the request never reaches the storage path and is
+  never stored. Two consequences, both of them ours to live with on the pin:
+  no `RejectEvent` policy runs on a kind 5, so none of the Quorum rules below
+  apply to one; and a client that already holds the deleted event cannot learn
+  from us that it was deleted, which is exactly what NIP-09 asks a relay to keep
+  publishing the request for. Not fixable from policy code — `AddEvent` is never
+  called, so there is no hook to register — and not fixable by storing the
+  request ourselves from `OnEventSaved`, which also never fires for it. It needs
+  khatru to stop branching on the kind, so it is in the same queue as everything
+  else in [Dependency pins](#dependency-pins).
 
 ## Dependency pins
 

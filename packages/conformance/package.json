@@ -1,0 +1,37 @@
+{
+  "name": "@quorum/conformance",
+  "version": "0.1.0",
+  "description": "Quorum: a runnable conformance suite — point it at a relay and get a section-by-section report",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "quorum-conformance": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "start": "node --experimental-strip-types src/cli.ts",
+    "prebuild": "pnpm --filter @quorum/protocol --filter @quorum/sdk build",
+    "build": "tsc -p tsconfig.json",
+    "pretypecheck": "pnpm --filter @quorum/protocol --filter @quorum/sdk --filter @quorum/test-kit build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "pretest": "pnpm --filter @quorum/protocol --filter @quorum/sdk --filter @quorum/test-kit build",
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@quorum/protocol": "workspace:*",
+    "@quorum/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@quorum/test-kit": "workspace:*",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

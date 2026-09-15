@@ -1,0 +1,18 @@
+// Type-checks the test files, which the build config deliberately leaves out.
+//
+// Same reason as every other package here: tests run under
+// `node --experimental-strip-types`, which erases types without reading them,
+// so without this a test can call a method that does not exist and the only
+// symptom is a failure at the wrong layer — or none at all, on a path the test
+// never takes.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
