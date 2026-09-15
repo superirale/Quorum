@@ -8,6 +8,8 @@
  */
 
 import assert from 'node:assert/strict'
+import { stat, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { after, describe, it } from 'node:test'
 import { computeId, type UnsignedEvent } from '@quorum/protocol'
 import {
@@ -157,6 +159,42 @@ describe('FileStore', () => {
     const reread = FileStore.in(dir.path)
     assert.equal((await reread.keys()).length, 50)
     assert.equal(await reread.get('k49'), 49)
+  })
+
+  it('is owner-only on disk, and stays that way after the rename that replaces it', async () => {
+    // The second write is the half that is easy to get wrong and impossible to
+    // notice: `rename` replaces the inode, so a mode applied to the *target*
+    // once is discarded by the next flush and the ledger silently reverts to
+    // 0644. What is in this file since M10 is the MLS `GroupState` — which
+    // holds `signaturePrivateKey` — and the archive's plaintexts, so on a
+    // shared box that is the channel readable and its owner impersonable.
+    const dir = await tempDir()
+    after(() => dir.remove())
+
+    const store = FileStore.in(dir.path)
+    const path = join(dir.path, 'agent-state.json')
+
+    await store.set('mls:ops:state', 'not really a ratchet, but this is where it goes')
+    assert.equal((await stat(path)).mode & 0o777, 0o600)
+
+    await store.set('mls:ops:identity', { signature: 'nor is this' })
+    assert.equal((await stat(path)).mode & 0o777, 0o600)
+  })
+
+  it('narrows a temporary file left world-readable by a process that died', async () => {
+    // `writeFile`'s `mode` applies only when it creates the file, so a leftover
+    // temporary keeps whatever mode it had. Reachable rather than theoretical:
+    // the temporary is named by pid, and a containerised agent is pid 1 on
+    // every restart, so the file a crash left behind is the one the next boot
+    // writes into.
+    const dir = await tempDir()
+    after(() => dir.remove())
+
+    const path = join(dir.path, 'agent-state.json')
+    await writeFile(`${path}.${process.pid}.tmp`, '{"stale":true}', { mode: 0o644 })
+
+    await FileStore.in(dir.path).set('mls:ops:state', 'the ratchet goes here')
+    assert.equal((await stat(path)).mode & 0o777, 0o600)
   })
 
   it('an unwritten store reads as empty rather than throwing', async () => {

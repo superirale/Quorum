@@ -9,9 +9,25 @@
  * made a mistake that should surface at build time, not as a blank page.
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Store } from './store.ts'
+
+/**
+ * Owner-only, because this file stopped being a ledger of ids.
+ *
+ * Through M8 a `Store` held dedup keys, cursors, counters and lease epochs —
+ * nothing whose disclosure costs anything. `mls` changed that twice over: the
+ * ratchet's `GroupState` is written here and contains `signaturePrivateKey` and
+ * the whole key schedule, and the {@link Archive} beside it holds the plaintext
+ * of every message this client could read. Between them, this one file is enough
+ * to read the channel and to impersonate its owner in the group.
+ *
+ * The default was 0644 masked by umask, so on an ordinary multi-user box every
+ * account could read both. Narrowed here rather than left to the caller because
+ * the caller cannot know: the SDK decides what goes in the file.
+ */
+const OWNER_ONLY = 0o600
 
 /**
  * A single JSON file, rewritten atomically.
@@ -75,7 +91,24 @@ export class FileStore implements Store {
       const body = JSON.stringify(this.data)
       await mkdir(dirname(this.path), { recursive: true })
       const tmp = `${this.path}.${process.pid}.tmp`
-      await writeFile(tmp, body, 'utf8')
+      // The mode goes on the *temporary* file, because `rename` replaces the
+      // target inode and a mode applied to an existing ledger is discarded by
+      // the next flush.
+      //
+      // Both calls are here and each covers what the other cannot.
+      // `writeFile`'s `mode` applies only when it *creates* the file, so it is
+      // the one that stops the ledger existing at 0644 for the instant before
+      // the `chmod` — a window an unprivileged reader only has to open an fd
+      // inside, since the access check happens once at open. And it does
+      // nothing at all when the path already exists, which happens here
+      // whenever a process died between the write and the rename: the
+      // temporary is named by pid, and a containerised agent is pid 1 on every
+      // restart, so `<path>.1.tmp` from the crash is exactly the file the next
+      // boot writes into. Only the second of those is reachable by a test —
+      // deleting `mode:` leaves the suite green, and the comment is the record
+      // of why it stays.
+      await writeFile(tmp, body, { encoding: 'utf8', mode: OWNER_ONLY })
+      await chmod(tmp, OWNER_ONLY)
       await rename(tmp, this.path)
     })
     return this.writing
